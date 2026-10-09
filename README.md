@@ -21,6 +21,26 @@ credentials, SSH keys, dumps) are gitignored and are backed up separately.
 
 Each step is reviewed with the owner before running on the Pi.
 
+## Secret scanning (public repo)
+
+This repo is public, so three layers keep secrets out of it:
+
+- **Local hooks** (`.githooks/`): gitleaks scans staged changes before every
+  commit and every commit before a push. Enable once per clone:
+  `scripts/install-secret-scan.sh` (installs a pinned, checksum-verified
+  gitleaks and sets `core.hooksPath`). The nightly config sync (step 5) runs
+  the same scan and refuses to push on a finding.
+- **CI** (`.github/workflows/secret-scan.yml`): scans the full history on
+  every push and PR.
+- **GitHub push protection**: Settings → Code security → enable *Secret
+  scanning* and *Push protection*.
+
+Rules live in `.gitleaks.toml`: gitleaks defaults plus Supabase `sb_secret_`
+keys, cloudflared `TunnelSecret`, any committed `.env`, and weak
+`*PASSWORD*=`/`*SECRET*=`/`*TOKEN*=` values. A hit means **rotate the secret**:
+once pushed to a public repo, assume it is compromised even if the commit
+is removed.
+
 ## Step 0: inspect
 
 On the Pi:
@@ -38,7 +58,7 @@ secret values. Read the report and paste it back.
 ## Planned layout
 
 ```
-scripts/      00-inspect.sh (read-only report)
+scripts/      00-inspect.sh (read-only report), install-secret-scan.sh
 supabase/     Layer 1 kit: prepare, install, backups, compose override (see supabase/README.md)
 ssh/          sshd_config drop-in, fail2ban jail
 cloudflared/  config.yml (no credentials JSON)
