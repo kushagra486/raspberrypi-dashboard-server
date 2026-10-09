@@ -15,9 +15,10 @@ mkdir -p "$BACKUP_DIR"
 umask 077
 
 # custom-format dump of the main database (restorable with pg_restore)
-docker exec supabase-db pg_dump -h localhost -U supabase_admin -d postgres -Fc \
-  > "$BACKUP_DIR/db-$STAMP.dump.tmp"
-mv "$BACKUP_DIR/db-$STAMP.dump.tmp" "$BACKUP_DIR/db-$STAMP.dump"
+TMP="$BACKUP_DIR/db-$STAMP.dump.tmp"
+trap 'rm -f "$TMP"' EXIT   # don't leave partial dumps on the stick after a failure
+docker exec supabase-db pg_dump -h localhost -U supabase_admin -d postgres -Fc > "$TMP"
+mv "$TMP" "$BACKUP_DIR/db-$STAMP.dump"
 
 # secrets (JWT keys etc.) - needed to restore a working project
 cp "$PROJECT_DIR/.env" "$BACKUP_DIR/env-$STAMP"

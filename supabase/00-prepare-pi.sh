@@ -23,6 +23,17 @@ die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [ -n "$PEN_DEV" ] || { lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT; die "pass your pendrive partition, e.g. sudo ./00-prepare-pi.sh /dev/sda1"; }
 [ -b "$PEN_DEV" ] || die "$PEN_DEV is not a block device"
 
+# ---------------------------------------------------------------- page size
+# The Pi 5 default kernel (kernel_2712.img) uses 16K pages; software built
+# with jemalloc can crash on it. This script does not change the kernel.
+if [ "$(getconf PAGESIZE)" != "4096" ]; then
+  CONFIG=/boot/firmware/config.txt
+  [ -f "$CONFIG" ] || CONFIG=/boot/config.txt
+  warn "kernel page size is $(getconf PAGESIZE), not 4096."
+  warn "If any Supabase container crashes at start, switch to the 4K kernel:"
+  warn "  echo 'kernel=kernel8.img' | sudo tee -a $CONFIG && sudo reboot"
+fi
+
 # ---------------------------------------------------------------- pendrive
 FSTYPE="$(blkid -o value -s TYPE "$PEN_DEV" || true)"
 UUID="$(blkid -o value -s UUID "$PEN_DEV" || true)"
@@ -69,9 +80,9 @@ if [ ! -e /sys/fs/cgroup/cgroup.controllers ] || ! grep -qw memory /sys/fs/cgrou
 fi
 
 # ---------------------------------------------------------------- zram swap
+apt-get update -y
 if ! swapon --show=NAME --noheadings | grep -q zram; then
   log "installing zram swap"
-  apt-get update -y
   apt-get install -y zram-tools
   cat > /etc/default/zramswap <<'EOF'
 ALGO=zstd

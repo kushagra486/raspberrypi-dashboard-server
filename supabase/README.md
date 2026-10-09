@@ -17,7 +17,7 @@ does not lose everything.
 
 ## Install (about 30-45 min, mostly image downloads)
 
-1. Flash **Raspberry Pi OS Lite (64-bit)**, update it, and copy this folder to the Pi.
+1. Flash **Raspberry Pi OS Lite (64-bit)**, update it, clone this repo on the Pi and `cd supabase`.
 2. Plug in the pendrive, find it with `lsblk` (usually `/dev/sda1`). It must be
    **ext4**. If it is FAT/exFAT, the script tells you the exact command to
    format it (that erases the stick), because it never formats anything itself.

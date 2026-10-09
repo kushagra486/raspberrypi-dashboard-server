@@ -13,7 +13,7 @@ credentials, SSH keys, dumps) are gitignored and are backed up separately.
 | Step | Layer | State |
 |---|---|---|
 | 0 | Inspect the Pi (`scripts/00-inspect.sh`) | **waiting on report** |
-| 1 | Self-hosted Supabase + zram, cgroups, pendrive, backups | not started |
+| 1 | Self-hosted Supabase + zram, cgroups, pendrive, backups (`supabase/`) | kit reviewed against upstream; not yet run on the Pi |
 | 2 | SSH hardening + dedicated agent key | not started |
 | 3 | Coolify, or a lighter substitute if RAM won't allow | not started |
 | 4 | Free subdomain + Cloudflare named tunnel | not started |
@@ -38,8 +38,8 @@ secret values. Read the report and paste it back.
 ## Planned layout
 
 ```
-scripts/      numbered setup scripts, run in order
-supabase/     compose override for the official supabase/docker stack
+scripts/      00-inspect.sh (read-only report)
+supabase/     Layer 1 kit: prepare, install, backups, compose override (see supabase/README.md)
 ssh/          sshd_config drop-in, fail2ban jail
 cloudflared/  config.yml (no credentials JSON)
 deploy/       Coolify export or compose + Caddy for the substitute
@@ -50,5 +50,5 @@ cron/         crontab entries (DB backup 03:30, config sync)
 
 1. Flash 64-bit Raspberry Pi OS, mount the pendrive at `/mnt/data` (ext4, by UUID, `nofail`).
 2. Restore secrets from the off-Pi copy.
-3. Run `scripts/` in order.
+3. Run `supabase/00-prepare-pi.sh`, `01-install-supabase.sh`, `02-install-backups.sh`, then later layers.
 4. Restore the latest `pg_dump` from `/mnt/data/backups` (or the off-Pi copy).
