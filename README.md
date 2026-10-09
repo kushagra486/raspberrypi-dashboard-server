@@ -12,7 +12,7 @@ credentials, SSH keys, dumps) are gitignored and are backed up separately.
 
 | Step | Layer | State |
 |---|---|---|
-| 0 | Inspect the Pi (`scripts/00-inspect.sh`) | **waiting on report** |
+| 0 | Fresh headless OS install ([docs/fresh-install.md](docs/fresh-install.md)), then inspect (`scripts/00-inspect.sh`) | **next** |
 | 1 | Self-hosted Supabase + zram, cgroups, pendrive, backups (`supabase/`) | kit reviewed against upstream; not yet run on the Pi |
 | 2 | SSH hardening + dedicated agent key | not started |
 | 3 | Coolify, or a lighter substitute if RAM won't allow | not started |
@@ -48,7 +48,7 @@ cron/         crontab entries (DB backup 03:30, config sync)
 
 ## Rebuild from scratch (to be filled in as each layer lands)
 
-1. Flash 64-bit Raspberry Pi OS, mount the pendrive at `/mnt/data` (ext4, by UUID, `nofail`).
+1. Flash the OS headless per [docs/fresh-install.md](docs/fresh-install.md), mount the pendrive at `/mnt/data` (ext4, by UUID, `nofail`).
 2. Restore secrets from the off-Pi copy.
 3. Run `supabase/00-prepare-pi.sh`, `01-install-supabase.sh`, `02-install-backups.sh`, then later layers.
 4. Restore the latest `pg_dump` from `/mnt/data/backups` (or the off-Pi copy).
