@@ -1,0 +1,28 @@
+# Secrets: never commit. Back these up locally/off-Pi only.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_*
+!id_*.pub
+**/cloudflared/*.json
+!**/cloudflared/config.example.json
+cert.pem
+*credentials*.json
+*.token
+secrets/
+
+# Data and backups
+*.dump
+*.sql.gz
+*.tar.gz
+backups/
+volumes/
+
+# Local inspection reports may contain hostnames/IPs
+inspect-report*.txt
+
+# Editor/OS noise
+.DS_Store
+*.swp
