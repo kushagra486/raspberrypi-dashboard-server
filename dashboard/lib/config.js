@@ -1,0 +1,46 @@
+// Loads config.json (non-secret settings) and .env (secrets) for Pi Console.
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const ROOT = path.resolve(__dirname, '..');
+
+function expandHome(p) {
+  return p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p;
+}
+
+function loadEnvFile(file) {
+  if (!fs.existsSync(file)) return;
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+}
+
+function load() {
+  loadEnvFile(path.join(ROOT, '.env'));
+  const file = process.env.PI_CONSOLE_CONFIG || path.join(ROOT, 'config.json');
+  const fallback = path.join(ROOT, 'config.example.json');
+  const raw = JSON.parse(fs.readFileSync(fs.existsSync(file) ? file : fallback, 'utf8'));
+
+  const cfg = {
+    bind: process.env.PI_CONSOLE_BIND || raw.bind || '127.0.0.1',
+    port: Number(process.env.PI_CONSOLE_PORT || raw.port || 7070),
+    // Set true once the console is served over HTTPS (e.g. behind Cloudflare Tunnel).
+    secureCookies: process.env.PI_CONSOLE_SECURE_COOKIES === '1' || raw.secureCookies === true,
+    // Extra origins allowed to talk to the API (the tunnel URL, for example).
+    allowedOrigins: raw.allowedOrigins || [],
+    projectRoots: (raw.projectRoots || ['~/projects']).map(expandHome).map(p => path.resolve(p)),
+    claudeBin: expandHome(raw.claudeBin || '~/.local/bin/claude'),
+    shell: raw.shell || process.env.SHELL || '/bin/bash',
+    backupDir: expandHome(raw.backupDir || '/mnt/data/backups'),
+    disks: (raw.disks || ['/', '/mnt/data']).map(expandHome),
+    dockerSocket: raw.dockerSocket || '/var/run/docker.sock',
+    links: raw.links || [],
+    sessionTtlHours: Number(raw.sessionTtlHours || 12),
+    passwordHash: process.env.PI_CONSOLE_PASSWORD_HASH || '',
+  };
+  return cfg;
+}
+
+module.exports = { load, ROOT };

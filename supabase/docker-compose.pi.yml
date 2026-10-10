@@ -1,0 +1,57 @@
+# Pi 5 (4 GB) overrides for the official self-hosted Supabase stack.
+# Layered on top of docker-compose.yml via COMPOSE_FILE (01-install-supabase.sh does this).
+#
+#  - memory limits are CAPS, not reservations: they stop one service starving the rest
+#  - Postgres is tuned for ~4 GB total RAM
+#  - Storage files live on the pendrive (/mnt/data/supabase-storage)
+#  - Postgres data stays on the SD card (default ./volumes/db/data); backups go to the pendrive
+#
+# Logflare/Vector (analytics) are not part of the default stack, which saves ~1 GB.
+# The Studio "Logs" pages will therefore be empty.
+
+services:
+  db:
+    mem_limit: 1280m
+    # Same command as the official file, plus small-RAM tuning.
+    # If an upstream update changes the base command, re-check this block.
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+      - -c
+      - log_min_messages=fatal
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=1GB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_connections=100
+
+  studio:
+    mem_limit: 512m
+  rest:
+    mem_limit: 256m
+  auth:
+    mem_limit: 256m
+  realtime:
+    mem_limit: 768m
+  storage:
+    mem_limit: 384m
+    volumes:
+      - /mnt/data/supabase-storage:/var/lib/storage:z
+  imgproxy:
+    mem_limit: 256m
+    volumes:
+      - /mnt/data/supabase-storage:/var/lib/storage:z
+  meta:
+    mem_limit: 256m
+  functions:
+    mem_limit: 384m
+  supavisor:
+    mem_limit: 512m
+  api-gw:
+    mem_limit: 192m
