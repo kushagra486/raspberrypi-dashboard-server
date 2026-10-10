@@ -72,6 +72,12 @@ test('login sets an HttpOnly SameSite cookie', async () => {
   assert.strictEqual((await call('/')).status, 200);
 });
 
+test('logins arriving through the tunnel (https from localhost) get a Secure cookie', async () => {
+  const r = await call('/api/login', { method: 'POST', headers: { 'x-forwarded-proto': 'https' }, body: JSON.stringify({ password: PASSWORD }) });
+  assert.strictEqual(r.status, 200);
+  assert.match(r.headers.get('set-cookie'), /; Secure/);
+});
+
 test('system, links, backups and docker endpoints', async () => {
   const s = await (await call('/api/system')).json();
   assert.ok(s.memory.total > 0 && Array.isArray(s.disks));

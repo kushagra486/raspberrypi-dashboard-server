@@ -32,7 +32,7 @@ projects never pause (replacing Supabase cloud free tier). If you are running
 | 1 | Self-hosted Supabase (official docker stack), zram, memory cgroup (reboot), pendrive at `/mnt/data`, nightly `pg_dump` 03:30 | `supabase/` (read its README) | kit reviewed against upstream, never run on hardware |
 | 2 | SSH hardening: key-only, no root login, fail2ban, dedicated revocable agent key. Port 22 never public. `docker` group = root: say so once, let him decide | `ssh/` (todo) | not started |
 | 3 | Coolify as fallback deploy target **only if RAM allows** with Supabase running; else ask about Dokploy/CapRover/compose+Caddy | `deploy/` (todo) | not started |
-| 4 | Free subdomain (verify provider allows NS delegation to Cloudflare) + Cloudflare named tunnel → gateway :8000, dashboards, SSH via Access. Then update `SUPABASE_PUBLIC_URL`, `API_EXTERNAL_URL`, `SITE_URL` | `cloudflared/` (todo) | not started |
+| 4 | Free subdomain (verify provider allows NS delegation to Cloudflare) + Cloudflare named tunnel → gateway :8000, dashboards, SSH via Access. Then update `SUPABASE_PUBLIC_URL`, `API_EXTERNAL_URL`, `SITE_URL` | `cloudflared/`, `docs/remote-access.md` | domain `kushagra.dpdns.org` chosen; tunnel script + Access steps written; waiting for Cloudflare to show it Active. Access (card on file, not charged) approved by owner |
 | + | Pi Console dashboard (`dashboard/`): stats, Claude Code sessions via tmux + browser terminal, Docker, links, backups. Port 7070, LAN only until Layer 4 + Cloudflare Access | `dashboard/` | built + tested off-Pi; install anytime with `./install.sh` |
 | 5 | Nightly config sync to this repo: gitleaks scan, commit only on change, deploy key scoped to this repo. Test a full restore | `cron/` (todo) | not started |
 

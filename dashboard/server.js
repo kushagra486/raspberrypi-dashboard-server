@@ -40,7 +40,7 @@ function send(res, status, body, type = 'application/json') {
 function clientIp(req) {
   // Behind cloudflared every request comes from localhost; trust its header only then.
   const direct = req.socket.remoteAddress;
-  if ((direct === '127.0.0.1' || direct === '::1') && req.headers['cf-connecting-ip']) return req.headers['cf-connecting-ip'];
+  if (['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(direct) && req.headers['cf-connecting-ip']) return req.headers['cf-connecting-ip'];
   return direct;
 }
 
@@ -50,6 +50,12 @@ function originOk(req) {
   if (!origin) return false;
   if (cfg.allowedOrigins.includes(origin)) return true;
   try { return new URL(origin).host === req.headers.host; } catch { return false; }
+}
+
+// cloudflared reaches us from localhost and marks tunnel traffic as HTTPS.
+function viaHttps(req) {
+  const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+  return cfg.secureCookies || (local && req.headers['x-forwarded-proto'] === 'https');
 }
 
 function token(req) { return parseCookies(req.headers.cookie)[COOKIE]; }
@@ -146,7 +152,7 @@ const server = http.createServer(async (req, res) => {
       const r = auth.login(clientIp(req), password);
       if (!r.ok) return send(res, 401, { error: r.error });
       const flags = ['HttpOnly', 'SameSite=Strict', 'Path=/', `Max-Age=${cfg.sessionTtlHours * 3600}`];
-      if (cfg.secureCookies) flags.push('Secure');
+      if (viaHttps(req)) flags.push('Secure');
       res.setHeader('Set-Cookie', `${COOKIE}=${r.token}; ${flags.join('; ')}`);
       return send(res, 200, { ok: true });
     }

@@ -16,7 +16,7 @@ credentials, SSH keys, dumps) are gitignored and are backed up separately.
 | 1 | Self-hosted Supabase + zram, cgroups, pendrive, backups (`supabase/`) | kit reviewed against upstream; not yet run on the Pi |
 | 2 | SSH hardening + dedicated agent key | not started |
 | 3 | Coolify, or a lighter substitute if RAM won't allow | not started |
-| 4 | Free subdomain + Cloudflare named tunnel | not started |
+| 4 | `kushagra.dpdns.org` + Cloudflare named tunnel + Access ([docs/remote-access.md](docs/remote-access.md)) | scripts ready; waiting for the domain to be Active |
 | 5 | Nightly config backup to this repo | not started |
 | + | **Pi Console** dashboard: stats, Claude Code sessions in the browser, Docker services, app links, backups (`dashboard/`) | built and tested off-Pi; install with `dashboard/install.sh` |
 
@@ -62,8 +62,8 @@ secret values. Read the report and paste it back.
 scripts/      00-inspect.sh (read-only report), install-secret-scan.sh
 dashboard/    Pi Console: one web dashboard for the Pi (see dashboard/README.md)
 supabase/     Layer 1 kit: prepare, install, backups, compose override (see supabase/README.md)
-ssh/          sshd_config drop-in, fail2ban jail
-cloudflared/  config.yml (no credentials JSON)
+ssh/          sshd drop-ins (key-only SSH through the tunnel)
+cloudflared/  tunnel config template + setup-tunnel.sh (credentials stay on the Pi)
 deploy/       Coolify export or compose + Caddy for the substitute
 cron/         crontab entries (DB backup 03:30, config sync)
 ```
