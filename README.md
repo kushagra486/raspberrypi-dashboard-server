@@ -18,6 +18,7 @@ credentials, SSH keys, dumps) are gitignored and are backed up separately.
 | 3 | Coolify, or a lighter substitute if RAM won't allow | not started |
 | 4 | Free subdomain + Cloudflare named tunnel | not started |
 | 5 | Nightly config backup to this repo | not started |
+| + | **Pi Console** dashboard: stats, Claude Code sessions in the browser, Docker services, app links, backups (`dashboard/`) | built and tested off-Pi; install with `dashboard/install.sh` |
 
 Each step is reviewed with the owner before running on the Pi.
 
@@ -59,6 +60,7 @@ secret values. Read the report and paste it back.
 
 ```
 scripts/      00-inspect.sh (read-only report), install-secret-scan.sh
+dashboard/    Pi Console: one web dashboard for the Pi (see dashboard/README.md)
 supabase/     Layer 1 kit: prepare, install, backups, compose override (see supabase/README.md)
 ssh/          sshd_config drop-in, fail2ban jail
 cloudflared/  config.yml (no credentials JSON)

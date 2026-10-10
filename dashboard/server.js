@@ -1,0 +1,213 @@
+// Pi Console: one dashboard for the Pi. Plain Node http + ws, no framework.
+const fs = require('fs');
+const http = require('http');
+const path = require('path');
+const { WebSocketServer } = require('ws');
+
+const config = require('./lib/config');
+const { Auth, parseCookies } = require('./lib/auth');
+const system = require('./lib/system');
+const { Docker } = require('./lib/docker');
+const { Sessions } = require('./lib/sessions');
+
+const cfg = config.load();
+const auth = new Auth({ passwordHash: cfg.passwordHash, ttlHours: cfg.sessionTtlHours });
+const docker = new Docker(cfg.dockerSocket);
+const sessions = new Sessions(cfg);
+
+const PUBLIC = path.join(config.ROOT, 'public');
+const VENDOR = {
+  'xterm.js': require.resolve('@xterm/xterm/lib/xterm.js'),
+  'xterm.css': require.resolve('@xterm/xterm/css/xterm.css'),
+  'addon-fit.js': require.resolve('@xterm/addon-fit/lib/addon-fit.js'),
+};
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
+const COOKIE = 'pc_session';
+
+function securityHeaders(res) {
+  res.setHeader('Content-Security-Policy',
+    "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Frame-Options', 'DENY');
+}
+
+function send(res, status, body, type = 'application/json') {
+  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store' });
+  res.end(type === 'application/json' ? JSON.stringify(body) : body);
+}
+
+function clientIp(req) {
+  // Behind cloudflared every request comes from localhost; trust its header only then.
+  const direct = req.socket.remoteAddress;
+  if ((direct === '127.0.0.1' || direct === '::1') && req.headers['cf-connecting-ip']) return req.headers['cf-connecting-ip'];
+  return direct;
+}
+
+// State-changing requests and terminal sockets must come from this site's own pages.
+function originOk(req) {
+  const origin = req.headers.origin;
+  if (!origin) return false;
+  if (cfg.allowedOrigins.includes(origin)) return true;
+  try { return new URL(origin).host === req.headers.host; } catch { return false; }
+}
+
+function token(req) { return parseCookies(req.headers.cookie)[COOKIE]; }
+
+function readJson(req, limit = 64 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', c => {
+      size += c.length;
+      if (size > limit) { reject(new Error('body too large')); req.destroy(); }
+      else chunks.push(c);
+    });
+    req.on('end', () => {
+      try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {}); }
+      catch { reject(new Error('invalid JSON')); }
+    });
+  });
+}
+
+function serveFile(res, file) {
+  fs.readFile(file, (err, data) => {
+    if (err) return send(res, 404, 'Not found', 'text/plain');
+    send(res, 200, data, MIME[path.extname(file)] || 'application/octet-stream');
+  });
+}
+
+async function listBackups() {
+  try {
+    const names = await fs.promises.readdir(cfg.backupDir);
+    const items = await Promise.all(names.filter(n => !n.startsWith('.')).map(async n => {
+      const st = await fs.promises.stat(path.join(cfg.backupDir, n));
+      return { name: n, size: st.size, modified: st.mtimeMs };
+    }));
+    return items.sort((a, b) => b.modified - a.modified);
+  } catch (e) { return { error: `${cfg.backupDir}: ${e.code || e.message}` }; }
+}
+
+async function api(req, res, url) {
+  const route = `${req.method} ${url.pathname}`;
+  let m;
+
+  if (route === 'GET /api/system') return send(res, 200, await system.snapshot(cfg.disks));
+  if (route === 'GET /api/links') return send(res, 200, cfg.links);
+  if (route === 'GET /api/backups') return send(res, 200, await listBackups());
+
+  if (route === 'GET /api/docker') {
+    try { return send(res, 200, await docker.list()); }
+    catch (e) { return send(res, 503, { error: `Docker unavailable: ${e.message}` }); }
+  }
+  if ((m = url.pathname.match(/^\/api\/docker\/([^/]+)\/logs$/)) && req.method === 'GET') {
+    return send(res, 200, { logs: await docker.logs(m[1], url.searchParams.get('tail')) });
+  }
+  if ((m = url.pathname.match(/^\/api\/docker\/([^/]+)\/(start|stop|restart)$/)) && req.method === 'POST') {
+    await docker.action(m[1], m[2]);
+    return send(res, 200, { ok: true });
+  }
+
+  if (route === 'GET /api/sessions') return send(res, 200, await sessions.list());
+  if (route === 'GET /api/folders') return send(res, 200, sessions.folders());
+  if (route === 'POST /api/sessions') return send(res, 201, await sessions.create(await readJson(req)));
+  if (route === 'POST /api/folders') {
+    const { root, name } = await readJson(req);
+    if (!cfg.projectRoots.includes(root)) throw new Error('Unknown project root.');
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name || '')) throw new Error('Folder name: letters, digits, . _ - only.');
+    const dir = path.join(root, name);
+    await fs.promises.mkdir(dir, { recursive: false });
+    return send(res, 201, { dir });
+  }
+  if ((m = url.pathname.match(/^\/api\/sessions\/([^/]+)$/)) && req.method === 'DELETE') {
+    await sessions.kill(m[1]);
+    return send(res, 200, { ok: true });
+  }
+  return send(res, 404, { error: 'not found' });
+}
+
+const server = http.createServer(async (req, res) => {
+  securityHeaders(res);
+  const url = new URL(req.url, 'http://localhost');
+  try {
+    if (url.pathname === '/login' && req.method === 'GET') return serveFile(res, path.join(PUBLIC, 'login.html'));
+    if (url.pathname.startsWith('/static/')) {
+      const name = path.basename(url.pathname);
+      return serveFile(res, path.join(PUBLIC, name));
+    }
+    if (url.pathname.startsWith('/vendor/')) {
+      const file = VENDOR[path.basename(url.pathname)];
+      return file ? serveFile(res, file) : send(res, 404, 'Not found', 'text/plain');
+    }
+
+    if (url.pathname === '/api/login' && req.method === 'POST') {
+      if (!originOk(req)) return send(res, 403, { error: 'bad origin' });
+      const { password } = await readJson(req, 4096);
+      const r = auth.login(clientIp(req), password);
+      if (!r.ok) return send(res, 401, { error: r.error });
+      const flags = ['HttpOnly', 'SameSite=Strict', 'Path=/', `Max-Age=${cfg.sessionTtlHours * 3600}`];
+      if (cfg.secureCookies) flags.push('Secure');
+      res.setHeader('Set-Cookie', `${COOKIE}=${r.token}; ${flags.join('; ')}`);
+      return send(res, 200, { ok: true });
+    }
+
+    const authed = auth.check(token(req));
+    if (url.pathname === '/api/logout' && req.method === 'POST') {
+      auth.logout(token(req));
+      res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+      return send(res, 200, { ok: true });
+    }
+    if (url.pathname.startsWith('/api/')) {
+      if (!authed) return send(res, 401, { error: 'login required' });
+      if (req.method !== 'GET' && !originOk(req)) return send(res, 403, { error: 'bad origin' });
+      return await api(req, res, url);
+    }
+    if (!authed) { res.writeHead(302, { Location: '/login' }); return res.end(); }
+    if (url.pathname === '/' || url.pathname === '/index.html') return serveFile(res, path.join(PUBLIC, 'index.html'));
+    return send(res, 404, 'Not found', 'text/plain');
+  } catch (e) {
+    return send(res, 400, { error: e.message });
+  }
+});
+
+// Browser terminal: /ws/term?session=<name> attaches to that tmux session through a pty.
+const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+server.on('upgrade', (req, socket, head) => {
+  const url = new URL(req.url, 'http://localhost');
+  if (url.pathname !== '/ws/term' || !auth.check(token(req)) || !originOk(req)) {
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    return socket.destroy();
+  }
+  let target;
+  try { target = sessions.tmuxTarget(url.searchParams.get('session')); }
+  catch { socket.write('HTTP/1.1 400 Bad Request\r\n\r\n'); return socket.destroy(); }
+  wss.handleUpgrade(req, socket, head, ws => attachTerminal(ws, target));
+});
+
+function attachTerminal(ws, target) {
+  const pty = require('node-pty');
+  const term = pty.spawn('tmux', ['attach-session', '-t', target], {
+    name: 'xterm-256color', cols: 120, rows: 32, cwd: process.env.HOME,
+    env: { ...process.env, TERM: 'xterm-256color' },
+  });
+  term.onData(d => { if (ws.readyState === ws.OPEN) ws.send(d); });
+  term.onExit(() => ws.close());
+  // Client protocol: "0<data>" keystrokes, "1{cols,rows}" resize.
+  ws.on('message', raw => {
+    const msg = raw.toString();
+    if (msg[0] === '0') term.write(msg.slice(1));
+    else if (msg[0] === '1') {
+      try {
+        const { cols, rows } = JSON.parse(msg.slice(1));
+        if (cols > 0 && rows > 0 && cols < 1000 && rows < 500) term.resize(cols, rows);
+      } catch {}
+    }
+  });
+  // Closing the tab only detaches; the tmux session keeps running.
+  ws.on('close', () => { try { term.kill(); } catch {} });
+}
+
+if (!cfg.passwordHash) console.warn('WARNING: no password set. Run `npm run set-password` before using the console.');
+server.listen(cfg.port, cfg.bind, () => console.log(`Pi Console on http://${cfg.bind}:${cfg.port}`));
+
+module.exports = { server };

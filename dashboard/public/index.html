@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pi Console</title>
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Pi Console <span id="host" class="muted"></span></div>
+    <nav id="tabs">
+      <button data-tab="overview" class="active">Overview</button>
+      <button data-tab="claude">Claude</button>
+      <button data-tab="services">Services</button>
+      <button data-tab="apps">Apps</button>
+      <button data-tab="backups">Backups</button>
+    </nav>
+    <button id="logout" class="ghost">Sign out</button>
+  </header>
+
+  <main>
+    <section id="tab-overview" class="tab active">
+      <div id="stats" class="grid"></div>
+    </section>
+
+    <section id="tab-claude" class="tab">
+      <div class="panel">
+        <h2>New session</h2>
+        <form id="new-session" class="row">
+          <input id="s-name" placeholder="name, e.g. janseva" pattern="[a-z0-9][a-z0-9\-]{0,39}" required>
+          <select id="s-dir" required></select>
+          <select id="s-kind">
+            <option value="claude">Claude Code</option>
+            <option value="shell">Shell</option>
+          </select>
+          <button type="submit">Start</button>
+        </form>
+        <details class="new-folder">
+          <summary>New project folder</summary>
+          <form id="new-folder" class="row">
+            <select id="f-root"></select>
+            <input id="f-name" placeholder="folder name" required>
+            <button type="submit">Create</button>
+          </form>
+        </details>
+        <p id="s-error" class="error" role="alert"></p>
+      </div>
+      <div class="panel">
+        <h2>Running sessions</h2>
+        <table class="list"><thead><tr><th>Name</th><th>Type</th><th>Folder</th><th>Started</th><th></th></tr></thead>
+          <tbody id="sessions"></tbody></table>
+      </div>
+    </section>
+
+    <section id="tab-services" class="tab">
+      <div class="panel">
+        <h2>Docker containers</h2>
+        <p id="d-error" class="error" role="alert"></p>
+        <table class="list"><thead><tr><th>Name</th><th>State</th><th>Image</th><th>Ports</th><th></th></tr></thead>
+          <tbody id="containers"></tbody></table>
+      </div>
+      <div class="panel hidden" id="logs-panel">
+        <h2>Logs: <span id="logs-name"></span> <button id="logs-close" class="ghost small">Close</button></h2>
+        <pre id="logs"></pre>
+      </div>
+    </section>
+
+    <section id="tab-apps" class="tab">
+      <div id="links" class="grid"></div>
+    </section>
+
+    <section id="tab-backups" class="tab">
+      <div class="panel">
+        <h2>Database backups</h2>
+        <p id="b-error" class="error"></p>
+        <table class="list"><thead><tr><th>File</th><th>Size</th><th>Age</th></tr></thead>
+          <tbody id="backups"></tbody></table>
+      </div>
+    </section>
+  </main>
+
+  <div id="term-view" class="term-view hidden">
+    <div class="term-bar">
+      <span id="term-title"></span>
+      <span class="muted">Closing this only detaches; the session keeps running.</span>
+      <button id="term-close" class="ghost small">Close</button>
+    </div>
+    <div id="terminal"></div>
+  </div>
+
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/addon-fit.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
