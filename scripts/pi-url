@@ -1,0 +1,3 @@
+#!/bin/sh
+# Print the current quick-tunnel address (changes after every restart).
+sudo journalctl -u quick-tunnel -b -o cat --no-pager | grep -o "https://[a-z0-9-]*\.trycloudflare\.com" | tail -1

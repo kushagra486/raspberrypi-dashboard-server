@@ -1,0 +1,17 @@
+# Temporary SSH access while there is no domain on Cloudflare.
+# Starts at boot; the trycloudflare.com address changes on every restart.
+# Read it with: pi-url   (installed to /usr/local/bin by docs/remote-access.md)
+# Tunnel logins are key-only (ssh/10-tunnel-keys-only.conf).
+[Unit]
+Description=Cloudflare quick tunnel for SSH (temporary until a domain is set up)
+After=network-online.target ssh.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --url ssh://localhost:22
+Restart=always
+RestartSec=5
+User=stdio
+
+[Install]
+WantedBy=multi-user.target
