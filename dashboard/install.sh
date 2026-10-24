@@ -13,9 +13,11 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" != "0" ] || die "run as your normal user (it uses sudo where needed), not root"
 
-log "installing system packages (tmux, Node.js, build tools for node-pty)"
+log "installing system packages (tmux, build tools for node-pty)"
 sudo apt-get update -y
-sudo apt-get install -y tmux nodejs npm build-essential python3
+sudo apt-get install -y tmux build-essential python3
+# Keep an existing Node.js (e.g. from NodeSource); Debian's npm package conflicts with it.
+command -v node >/dev/null && command -v npm >/dev/null || sudo apt-get install -y nodejs npm
 
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 [ "$NODE_MAJOR" -ge 18 ] || die "Node.js $NODE_MAJOR is too old; need 18 or newer"
@@ -28,8 +30,16 @@ npm ci --omit=dev --no-audit --no-fund
 mkdir -p "$RUN_HOME/projects"
 
 if ! grep -q '^PI_CONSOLE_PASSWORD_HASH=' .env 2>/dev/null; then
-  log "choose the dashboard password"
-  node scripts/set-password.js
+  if [ "${GENERATE_PASSWORD:-0}" = "1" ]; then
+    # Random password saved only on the Pi, readable only by this user.
+    PW="$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)"
+    (umask 077; printf '%s\n' "$PW" > "$RUN_HOME/pi-console-password.txt")
+    PI_CONSOLE_NEW_PASSWORD="$PW" node scripts/set-password.js
+    log "generated a password: cat ~/pi-console-password.txt (then delete the file)"
+  else
+    log "choose the dashboard password"
+    node scripts/set-password.js
+  fi
 fi
 
 if ! id -nG "$RUN_USER" | grep -qw docker; then
