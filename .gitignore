@@ -30,3 +30,6 @@ inspect-report*.txt
 # Node
 node_modules/
 dashboard/config.json
+
+# Built skill upload
+pi-backend-skill.zip

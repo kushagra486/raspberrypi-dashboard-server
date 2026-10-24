@@ -17,6 +17,12 @@ projects never pause (replacing Supabase cloud free tier). If you are running
 - **Tell honest limits.** He prefers that to reassurance.
 - If what you find on the Pi contradicts this file, say so and ask.
 
+## Skill
+
+`.claude/skills/pi-backend/` is the portable skill for reaching and operating the Pi
+from any session (connect script + `pi.sh` ops). Keep it in sync when infra facts change,
+and rebuild the upload zip (`pi-backend-skill.zip`, gitignored) for claude.ai.
+
 ## Owner to-do
 
 Open items only the owner can do are in [docs/TODO.md](docs/TODO.md)
