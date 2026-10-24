@@ -20,7 +20,7 @@ credentials, SSH keys, dumps) are gitignored and are backed up separately.
 | 5 | Nightly config backup to this repo | not started |
 | + | **Pi Console** dashboard: stats, Claude Code sessions in the browser, Docker services, app links, backups (`dashboard/`) | **running on the Pi** at http://192.168.1.91:7070 |
 
-Each step is reviewed with the owner before running on the Pi.
+Each step is reviewed with the owner before running on the Pi. Owner to-dos: [docs/TODO.md](docs/TODO.md).
 
 ## Secret scanning (public repo)
 

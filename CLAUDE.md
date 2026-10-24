@@ -17,6 +17,12 @@ projects never pause (replacing Supabase cloud free tier). If you are running
 - **Tell honest limits.** He prefers that to reassurance.
 - If what you find on the Pi contradicts this file, say so and ask.
 
+## Owner to-do
+
+Open items only the owner can do are in [docs/TODO.md](docs/TODO.md)
+(passwords to a password manager, Tailscale key expiry, power supply, ...).
+Mention the relevant ones when they matter; don't nag every message.
+
 ## Architecture (agreed)
 
 - Vercel stays **primary** for app frontends; the Pi is the always-on database
