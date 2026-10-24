@@ -1,3 +1,6 @@
+> **Not in use.** The owner decided not to use a domain (2026-10-24). Remote access
+> is Tailscale: see [remote-access-tailscale.md](remote-access-tailscale.md).
+
 # Remote access from anywhere (Layer 4)
 
 Permanent addresses for the Pi under `kushagra.dpdns.org`, through a Cloudflare
