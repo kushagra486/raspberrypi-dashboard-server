@@ -17,7 +17,7 @@ always-on database. Infra repo: `github.com/kushagra486/raspberrypi-dashboard-se
 | Pi on Tailscale | `raspberrypi` / `raspberrypi.tailc40262.ts.net`, user `stdio`, tag `tag:pi` |
 | **Public Supabase API** (Funnel) | `https://raspberrypi.tailc40262.ts.net` (only `/rest /auth /storage /realtime /functions /graphql` `/v1`) |
 | Supabase Studio (private) | `http://raspberrypi:8000`, login `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` |
-| Pi Console (private) | `http://raspberrypi:7070`: stats, Claude/shell sessions in tmux, Docker, backups |
+| **Pi Console app** (private) | `https://raspberrypi.tailc40262.ts.net:8443` (installable app, Tailscale Serve) or `http://raspberrypi:7070`: stats, **Database** (projects, tables, RLS gaps, SQL editor, auth users, storage), Claude/shell sessions in tmux, Docker, backups |
 | Supabase files | `~/supabase-project` (self-hosted v0.8.3, Postgres 17, **Kong** gateway) |
 | Backups | nightly 03:30 → `/mnt/data/backups` (pendrive), `pg_dump -Fc` + `.env` |
 | Apps | one Supabase instance, **one Postgres schema per app** |

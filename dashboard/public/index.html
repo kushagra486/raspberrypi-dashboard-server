@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pi Console</title>
   <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/icon-180.png">
+  <meta name="theme-color" content="#121821">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Pi Console">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -13,6 +19,7 @@
     <nav id="tabs">
       <button data-tab="overview" class="active">Overview</button>
       <button data-tab="claude">Claude</button>
+      <button data-tab="database">Database</button>
       <button data-tab="services">Services</button>
       <button data-tab="apps">Apps</button>
       <button data-tab="backups">Backups</button>
@@ -51,6 +58,73 @@
         <h2>Running sessions</h2>
         <table class="list"><thead><tr><th>Name</th><th>Type</th><th>Folder</th><th>Started</th><th></th></tr></thead>
           <tbody id="sessions"></tbody></table>
+      </div>
+    </section>
+
+
+    <section id="tab-database" class="tab">
+      <nav class="subnav" id="db-nav">
+        <button data-db="overview" class="active">Overview</button>
+        <button data-db="projects">Projects</button>
+        <button data-db="sql">SQL editor</button>
+        <button data-db="users">Auth users</button>
+        <button data-db="storage">Storage</button>
+        <a id="db-studio" class="ghost-link" target="_blank" rel="noopener">Open Studio ↗</a>
+      </nav>
+      <p id="db-error" class="error" role="alert"></p>
+
+      <div id="db-overview" class="db-view active"><div id="db-cards" class="grid"></div></div>
+
+      <div id="db-projects" class="db-view">
+        <div class="panel">
+          <h2>Projects <span class="muted small">one schema per app</span></h2>
+          <form id="db-new-project" class="row">
+            <input id="db-new-name" placeholder="new app schema, e.g. janseva" pattern="[a-z][a-z0-9_]{1,30}" required>
+            <button type="submit">Create project</button>
+          </form>
+          <table class="list"><thead><tr><th>Schema</th><th>Tables</th><th>Size</th><th>API</th><th>RLS</th></tr></thead>
+            <tbody id="db-project-list"></tbody></table>
+        </div>
+        <div class="panel hidden" id="db-tables-panel">
+          <h2>Tables in <span id="db-schema-name" class="mono"></span></h2>
+          <table class="list"><thead><tr><th>Name</th><th>Kind</th><th>Rows (est.)</th><th>Size</th><th>RLS</th><th>Policies</th></tr></thead>
+            <tbody id="db-table-list"></tbody></table>
+        </div>
+        <div class="panel hidden" id="db-table-panel">
+          <h2><span id="db-table-name" class="mono"></span> <button id="db-table-close" class="ghost small">Close</button></h2>
+          <h3>Columns</h3>
+          <table class="list"><thead><tr><th>Column</th><th>Type</th><th>Nullable</th><th>Default</th></tr></thead>
+            <tbody id="db-columns"></tbody></table>
+          <h3>Policies</h3>
+          <div id="db-policies"></div>
+          <h3>Rows <span class="pager"><button id="db-prev" class="ghost small">◀</button> <span id="db-page" class="muted small"></span> <button id="db-next" class="ghost small">▶</button></span></h3>
+          <div class="scroll"><table class="list grid-data" id="db-rows"></table></div>
+        </div>
+      </div>
+
+      <div id="db-sql" class="db-view">
+        <div class="panel">
+          <textarea id="sql-input" spellcheck="false" placeholder="select * from public.my_table limit 10;"></textarea>
+          <div class="row sql-bar">
+            <button id="sql-run">Run <span class="muted small">Ctrl+Enter</span></button>
+            <label class="check"><input type="checkbox" id="sql-ro" checked> Read-only (safe)</label>
+            <span id="sql-meta" class="muted small"></span>
+          </div>
+          <p id="sql-error" class="error"></p>
+          <div class="scroll"><table class="list grid-data" id="sql-result"></table></div>
+        </div>
+      </div>
+
+      <div id="db-users" class="db-view">
+        <div class="panel"><h2>Auth users <span class="muted small">latest 200</span></h2>
+          <table class="list"><thead><tr><th>Email</th><th>Phone</th><th>Confirmed</th><th>Created</th><th>Last sign-in</th></tr></thead>
+            <tbody id="db-user-list"></tbody></table></div>
+      </div>
+
+      <div id="db-storage" class="db-view">
+        <div class="panel"><h2>Storage buckets</h2>
+          <table class="list"><thead><tr><th>Bucket</th><th>Public</th><th>Objects</th><th>Size</th></tr></thead>
+            <tbody id="db-bucket-list"></tbody></table></div>
       </div>
     </section>
 
@@ -93,5 +167,6 @@
   <script src="/vendor/xterm.js"></script>
   <script src="/vendor/addon-fit.js"></script>
   <script src="/static/app.js"></script>
+  <script src="/static/db.js"></script>
 </body>
 </html>

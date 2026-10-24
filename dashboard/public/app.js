@@ -210,7 +210,9 @@ $('#logout').addEventListener('click', async () => { await api('/api/logout', { 
 
 // Start on the tab in the URL, refresh live tabs every 5 s.
 const start = location.hash.slice(1);
-document.querySelector(`#tabs button[data-tab="${loaders[start] ? start : 'overview'}"]`).click();
+// Tabs whose code loads later (db.js) start their own loader once ready.
+const startBtn = document.querySelector(`#tabs button[data-tab="${CSS.escape(start)}"]`);
+(startBtn || document.querySelector('#tabs button[data-tab="overview"]')).click();
 setInterval(() => {
   if (document.hidden || !$('#term-view').classList.contains('hidden')) return;
   if (current === 'overview' || current === 'services') loaders[current]().catch(() => {});

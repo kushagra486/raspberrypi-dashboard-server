@@ -5,6 +5,7 @@ One dashboard for the Pi, in the browser, on any device.
 | Tab | What it does |
 |---|---|
 | **Overview** | CPU, memory, swap, temperature, disks (SD card and pendrive), uptime and load. Refreshes every 5 s. |
+| **Database** | Supabase Postgres at a glance: version, size, connections, auth users, storage, latest backup. **Projects** (one schema per app) with API exposure and **tables missing RLS flagged**; tables → columns, keys, policies, paged rows; **SQL editor** (read-only by default, 30 s timeout, 1000-row cap); auth users (no password hashes); storage buckets; *Create project* (runs `supabase/new-project.sh`). Full editing stays in Supabase Studio, linked. |
 | **Claude** | Start a **Claude Code** (or plain shell) session in any project folder, see all running sessions, open any of them in a full terminal in the browser, end them. Also creates new project folders. |
 | **Services** | Every Docker container (Supabase and anything else): state, ports, start / stop / restart, last 300 log lines. |
 | **Apps** | One-click links to Supabase Studio, the API, and anything you add in `config.json`. |
@@ -15,6 +16,12 @@ detaches; the session keeps running and you can reopen it from your phone or lap
 
 Supabase's own dashboard (Studio) is linked, not rebuilt: it already is the full
 Supabase UI (tables, SQL editor, auth, storage), and a copy would cost RAM the Pi lacks.
+
+## Install it as an app
+
+Open `https://raspberrypi.tailc40262.ts.net:8443` (Tailscale Serve: HTTPS, tailnet-only) and choose
+**Install app** (Chrome/Edge) or **Share → Add to Home Screen** (iPhone). It opens in its own
+window with its own icon, on any device signed in to Tailscale.
 
 ## Install (on the Pi)
 

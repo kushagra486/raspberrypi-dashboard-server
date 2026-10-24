@@ -9,11 +9,13 @@ const { Auth, parseCookies } = require('./lib/auth');
 const system = require('./lib/system');
 const { Docker } = require('./lib/docker');
 const { Sessions } = require('./lib/sessions');
+const { Database } = require('./lib/db');
 
 const cfg = config.load();
 const auth = new Auth({ passwordHash: cfg.passwordHash, ttlHours: cfg.sessionTtlHours });
 const docker = new Docker(cfg.dockerSocket);
 const sessions = new Sessions(cfg);
+const database = new Database(cfg, docker);
 
 const PUBLIC = path.join(config.ROOT, 'public');
 const VENDOR = {
@@ -21,7 +23,7 @@ const VENDOR = {
   'xterm.css': require.resolve('@xterm/xterm/css/xterm.css'),
   'addon-fit.js': require.resolve('@xterm/addon-fit/lib/addon-fit.js'),
 };
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 const COOKIE = 'pc_session';
 
 function securityHeaders(res) {
@@ -112,6 +114,33 @@ async function api(req, res, url) {
   if ((m = url.pathname.match(/^\/api\/docker\/([^/]+)\/(start|stop|restart)$/)) && req.method === 'POST') {
     await docker.action(m[1], m[2]);
     return send(res, 200, { ok: true });
+  }
+
+  // ---- database section
+  if (url.pathname.startsWith('/api/db/')) {
+    try {
+      if (route === 'GET /api/db/overview') return send(res, 200, { ...(await database.overview()), studioUrl: cfg.studioUrl });
+      if (route === 'GET /api/db/projects') return send(res, 200, await database.projects());
+      if (route === 'GET /api/db/tables') return send(res, 200, await database.tables(url.searchParams.get('schema') || ''));
+      if (route === 'GET /api/db/table') {
+        return send(res, 200, await database.table(url.searchParams.get('schema') || '', url.searchParams.get('name') || '', {
+          limit: url.searchParams.get('limit'), offset: url.searchParams.get('offset'),
+        }));
+      }
+      if (route === 'GET /api/db/users') return send(res, 200, await database.authUsers());
+      if (route === 'GET /api/db/buckets') return send(res, 200, await database.buckets());
+      if (route === 'POST /api/db/sql') {
+        const { sql, readOnly } = await readJson(req, 200 * 1024);
+        return send(res, 200, await database.run(sql, { readOnly: readOnly !== false }));
+      }
+      if (route === 'POST /api/db/projects') {
+        const { name } = await readJson(req);
+        return send(res, 201, await database.createProject(name));
+      }
+    } catch (e) {
+      return send(res, e.sql ? 400 : 502, { error: e.message });
+    }
+    return send(res, 404, { error: 'not found' });
   }
 
   if (route === 'GET /api/sessions') return send(res, 200, await sessions.list());

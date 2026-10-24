@@ -39,6 +39,16 @@ function load() {
     links: raw.links || [],
     sessionTtlHours: Number(raw.sessionTtlHours || 12),
     passwordHash: process.env.PI_CONSOLE_PASSWORD_HASH || '',
+    supabaseDir: expandHome(process.env.PI_CONSOLE_SUPABASE_DIR || raw.supabaseDir || '~/supabase-project'),
+    newProjectScript: expandHome(raw.newProjectScript || path.join(ROOT, '..', 'supabase', 'new-project.sh')),
+    studioUrl: raw.studioUrl || 'http://raspberrypi:8000',
+    db: {
+      host: process.env.PI_CONSOLE_DB_HOST || raw.db?.host || null,   // null = look up the container IP
+      port: Number(process.env.PI_CONSOLE_DB_PORT || raw.db?.port || 5432),
+      user: process.env.PI_CONSOLE_DB_USER || raw.db?.user || 'supabase_admin',
+      database: raw.db?.database || 'postgres',
+      container: raw.db?.container || 'supabase-db',
+    },
   };
   return cfg;
 }

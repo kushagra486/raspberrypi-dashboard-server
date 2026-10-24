@@ -81,3 +81,26 @@ pre#logs { max-height: 60vh; overflow: auto; background: #0b0f14; padding: 10px;
   .list th:nth-child(3), .list td:nth-child(3) { display: none; }
   .term-bar .muted { display: none; }
 }
+
+/* Database tab */
+.subnav { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.subnav button { background: transparent; border-color: transparent; }
+.subnav button.active { background: #1a2533; border-color: var(--line); color: var(--accent); }
+.ghost-link { margin-left: auto; color: var(--muted); text-decoration: none; padding: 8px 12px; }
+.ghost-link:hover { color: var(--accent); }
+.db-view { display: none; }
+.db-view.active { display: block; }
+.panel h3 { font-size: 14px; margin: 16px 0 8px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover td { background: #16202c; }
+.scroll { overflow: auto; max-height: 60vh; border: 1px solid var(--line); border-radius: 8px; }
+table.grid-data td, table.grid-data th { white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+table.grid-data th { position: sticky; top: 0; background: var(--panel); }
+textarea#sql-input { width: 100%; min-height: 180px; resize: vertical; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text); background: #0e141c; border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+.sql-bar { margin-top: 8px; align-items: center; }
+label.check { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+.policy { padding: 8px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; }
+.pager { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
+.row label.check { flex: none; white-space: nowrap; }
+.row label.check input { flex: none; width: auto; }
