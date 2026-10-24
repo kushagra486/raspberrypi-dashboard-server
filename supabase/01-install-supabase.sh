@@ -63,6 +63,10 @@ cp "$KIT_DIR/docker-compose.pi.yml" ./docker-compose.pi.yml
 if ! grep -q 'docker-compose.pi.yml' .env; then
   sh run.sh config add pi
 fi
+# Envoy (the default gateway) crashes on the Pi's 39-bit address space; use Kong.
+if ! grep -q 'docker-compose.kong.yml' .env; then
+  sh run.sh config add kong
+fi
 
 log "validating the combined compose file"
 docker compose config -q || die "compose validation failed - see the error above"

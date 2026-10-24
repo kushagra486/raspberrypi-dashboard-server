@@ -53,5 +53,8 @@ services:
     mem_limit: 384m
   supavisor:
     mem_limit: 512m
+  # Gateway: Kong (docker-compose.kong.yml), not the default Envoy. Envoy's
+  # tcmalloc assumes a 48-bit address space and crashes on the Pi 5's 4K-page
+  # kernel (39-bit). Kong idles around 180 MB, so give it headroom.
   api-gw:
-    mem_limit: 192m
+    mem_limit: 384m

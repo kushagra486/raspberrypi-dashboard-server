@@ -29,7 +29,7 @@ projects never pause (replacing Supabase cloud free tier). If you are running
 | Step | What | Where | Status |
 |---|---|---|---|
 | 0 | Inspect + clean the Pi | `scripts/00-inspect.sh` | **done 2026-10-24.** Debian 13 trixie 64-bit, 4K-page kernel8. Removed CasaOS, all its Docker apps (Immich, n8n, AdGuard, Syncthing, MySpeed, cloudflared-web), Ollama, OVOS, raspotify; disabled cups, Samba, desktop autologin (console boot). Kept SSH, Tailscale (logged out), Raspberry Pi Connect. Backups of all prior data in `~stdio/pre-cleanup/`. Pendrive formatted ext4 (`pidata`) at `/mnt/data` by UUID with `nofail`. Memory cgroup added to cmdline (needs reboot). **Power supply under-voltage seen (throttled=0x50000)**: owner to replace PSU |
-| 1 | Self-hosted Supabase (official docker stack), zram, memory cgroup (reboot), pendrive at `/mnt/data`, nightly `pg_dump` 03:30 | `supabase/` (read its README) | prepare step done (memory cgroup active after reboot, log rotation, pendrive); `01-install-supabase.sh` running 2026-10-24 into `~/supabase-project` |
+| 1 | Self-hosted Supabase (official docker stack) | `supabase/` (read its README) | **running on the Pi since 2026-10-24** in `~/supabase-project` (self-hosted v0.8.3, Postgres 17): 11 services healthy, ~1.3 GB RAM, 2.3 GB still free. **Gateway is Kong, not Envoy** (Envoy's tcmalloc needs 48-bit VA; the 4K kernel has 39-bit). Storage on `/mnt/data/supabase-storage`; `.env` mode 600; nightly `pg_dump` 03:30 to `/mnt/data/backups` (first dump verified). Studio + API on http://192.168.1.91:8000 |
 | 2 | SSH hardening: key-only, no root login, fail2ban, dedicated revocable agent key. Port 22 never public. `docker` group = root: say so once, let him decide | `ssh/` (todo) | not started |
 | 3 | Coolify as fallback deploy target **only if RAM allows** with Supabase running; else ask about Dokploy/CapRover/compose+Caddy | `deploy/` (todo) | not started |
 | 4 | Free subdomain + Cloudflare named tunnel → gateway :8000, dashboards, SSH via Access. Then update `SUPABASE_PUBLIC_URL`, `API_EXTERNAL_URL`, `SITE_URL` | `cloudflared/`, `docs/remote-access.md` | **blocked: no domain on the owner's Cloudflare account yet** (kushagra.dpdns.org NS point at Cloudflare but the site isn't added). Interim: `quick-tunnel.service` (trycloudflare, key-only SSH), address via `pi-url` |
@@ -42,7 +42,8 @@ projects never pause (replacing Supabase cloud free tier). If you are running
   crash. Fix: `kernel=kernel8.img` in `/boot/firmware/config.txt` + reboot (ask first).
 - Supabase idles ~2-2.5 GB; measure with `docker stats` / `free -h` before Layer 3.
 - Multiple apps share one Supabase via schemas (`supabase/new-project.sh`); RLS on every table.
-- Restore from a full `pg_dump` into a fresh install is untested.
+- Restore from a full `pg_dump` into a fresh install is untested (dump is readable with `pg_restore --list`).
+- Power supply under-voltage at every boot (`vcgencmd get_throttled` = 0x50000) until the owner swaps the PSU.
 
 ## Git
 

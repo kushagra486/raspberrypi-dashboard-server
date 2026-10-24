@@ -12,13 +12,13 @@ credentials, SSH keys, dumps) are gitignored and are backed up separately.
 
 | Step | Layer | State |
 |---|---|---|
-| 0 | Fresh headless OS install ([docs/fresh-install.md](docs/fresh-install.md)), then inspect (`scripts/00-inspect.sh`) | **next** |
-| 1 | Self-hosted Supabase + zram, cgroups, pendrive, backups (`supabase/`) | kit reviewed against upstream; not yet run on the Pi |
+| 0 | Inspect and clean the Pi (`scripts/00-inspect.sh`) | **done** (old CasaOS stack removed, data backed up on the Pi) |
+| 1 | Self-hosted Supabase + zram, cgroups, pendrive, backups (`supabase/`) | **running on the Pi** (Kong gateway), nightly backups to the pendrive |
 | 2 | SSH hardening + dedicated agent key | not started |
 | 3 | Coolify, or a lighter substitute if RAM won't allow | not started |
 | 4 | `kushagra.dpdns.org` + Cloudflare named tunnel + Access ([docs/remote-access.md](docs/remote-access.md)) | scripts ready; waiting for the domain to be Active |
 | 5 | Nightly config backup to this repo | not started |
-| + | **Pi Console** dashboard: stats, Claude Code sessions in the browser, Docker services, app links, backups (`dashboard/`) | built and tested off-Pi; install with `dashboard/install.sh` |
+| + | **Pi Console** dashboard: stats, Claude Code sessions in the browser, Docker services, app links, backups (`dashboard/`) | **running on the Pi** at http://192.168.1.91:7070 |
 
 Each step is reviewed with the owner before running on the Pi.
 
