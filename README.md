@@ -16,7 +16,7 @@ credentials, SSH keys, dumps) are gitignored and are backed up separately.
 | 1 | Self-hosted Supabase + zram, cgroups, pendrive, backups (`supabase/`) | **running on the Pi** (Kong gateway), nightly backups to the pendrive |
 | 2 | SSH hardening + dedicated agent key | not started |
 | 3 | Coolify, or a lighter substitute if RAM won't allow | not started |
-| 4 | `kushagra.dpdns.org` + Cloudflare named tunnel + Access ([docs/remote-access.md](docs/remote-access.md)) | scripts ready; waiting for the domain to be Active |
+| 4 | Remote access via **Tailscale**: private Studio/Console/SSH, public Supabase API via Funnel ([docs/remote-access-tailscale.md](docs/remote-access-tailscale.md)) | **done** |
 | 5 | Nightly config backup to this repo | not started |
 | + | **Pi Console** dashboard: stats, Claude Code sessions in the browser, Docker services, app links, backups (`dashboard/`) | **running on the Pi** at http://192.168.1.91:7070 |
 
@@ -63,7 +63,8 @@ scripts/      00-inspect.sh (read-only report), install-secret-scan.sh
 dashboard/    Pi Console: one web dashboard for the Pi (see dashboard/README.md)
 supabase/     Layer 1 kit: prepare, install, backups, compose override (see supabase/README.md)
 ssh/          sshd drop-ins (key-only SSH through the tunnel)
-cloudflared/  tunnel config template + setup-tunnel.sh (credentials stay on the Pi)
+tailscale/    setup-funnel.sh: publish only the Supabase API paths
+cloudflared/  Cloudflare tunnel files (for a future domain) + quick-tunnel.service
 deploy/       Coolify export or compose + Caddy for the substitute
 cron/         crontab entries (DB backup 03:30, config sync)
 ```
