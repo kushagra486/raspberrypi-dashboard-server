@@ -64,7 +64,7 @@ dashboard/    Pi Console: one web dashboard for the Pi (see dashboard/README.md)
 supabase/     Layer 1 kit: prepare, install, backups, compose override (see supabase/README.md)
 ssh/          sshd drop-ins (key-only SSH through the tunnel)
 tailscale/    setup-funnel.sh: publish only the Supabase API paths
-cloudflared/  dormant Cloudflare files (no domain, by owner decision) + quick-tunnel.service (temporary)
+cloudflared/  dormant Cloudflare files (no domain, by owner decision)
 deploy/       Coolify export or compose + Caddy for the substitute
 cron/         crontab entries (DB backup 03:30, config sync)
 ```

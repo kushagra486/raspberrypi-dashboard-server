@@ -39,5 +39,5 @@ app's own URL for auth redirects, then `docker compose up -d`.
   apps, not for heavy traffic.
 - Tailscale clients are open source; the coordination server is not.
 - If the Pi or home internet is down, the API is down (Vercel frontends stay up).
-- Claude cloud sessions still reach SSH through the temporary
-  `quick-tunnel.service` (address via `pi-url`, changes on reboot).
+- Claude cloud sessions reach SSH over Tailscale (`tailscale/claude-connect.sh`,
+  docs/claude-session-access.md); the temporary quick tunnel is gone.
