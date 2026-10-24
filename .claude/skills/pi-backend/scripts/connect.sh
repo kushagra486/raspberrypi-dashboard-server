@@ -35,6 +35,16 @@ _pi_write_ssh_config() {  # $1 = optional ProxyCommand
   } >> "$HOME/.ssh/config"
 }
 
+# Cloud containers may lack an SSH client.
+if ! command -v ssh >/dev/null 2>&1; then
+  if [ "$(id -u)" = 0 ] && command -v apt-get >/dev/null 2>&1; then
+    (apt-get install -y -q openssh-client >/dev/null 2>&1 || { apt-get update -q >/dev/null 2>&1 && apt-get install -y -q openssh-client >/dev/null 2>&1; }) \
+      || _pi_fail "could not install openssh-client"
+  else
+    _pi_fail "no ssh client; install OpenSSH (Windows: Settings > Optional features > OpenSSH Client)"
+  fi
+fi
+
 # 1. A system Tailscale that is already connected (laptop / desktop).
 if command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1 \
    && tailscale status 2>/dev/null | grep -qw "$PI_HOST"; then
