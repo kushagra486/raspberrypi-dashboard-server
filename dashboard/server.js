@@ -165,6 +165,7 @@ async function api(req, res, url) {
         return send(res, 200, await database.branch(schema, { withData: !!withData, reset: !!reset }));
       }
       if (route === 'DELETE /api/db/branch') return send(res, 200, await database.deleteBranch(url.searchParams.get('schema') || ''));
+      if (route === 'GET /api/db/project-overview') return send(res, 200, await rootDatabase.projectOverview(url.searchParams.get('project') || ''));
       if (route === 'GET /api/db/connect') return send(res, 200, await rootDatabase.connectInfo(url.searchParams.get('schema') || ''));
       if (route === 'POST /api/db/rows') return send(res, 200, await database.writeRow(await readJson(req, 1024 * 1024)));
       if (route === 'GET /api/db/export') {

@@ -156,3 +156,23 @@ select.small { padding: 3px 6px; font-size: 13px; }
 .db-context-wrap select { max-width: 240px; }
 body.db-isolated .db-context-wrap select { border-color: var(--accent); color: var(--accent); }
 body.db-isolated #db-studio { display: none; }
+
+/* Per-project overview */
+.ov-cards { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.card.status-critical { border-color: rgba(242, 95, 92, .55); }
+.card.status-critical .card-value { color: var(--bad); }
+.ov-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin: 14px 0; }
+.ov-chart { margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+.ov-chart figcaption { font-weight: 600; margin-bottom: 6px; }
+.chart-wrap { position: relative; }
+.bar-chart { width: 100%; height: auto; display: block; }
+.bar-chart .axis { stroke: #2b3a4f; stroke-width: 1; }
+.bar-chart .grid { stroke: #1d2837; stroke-width: 1; stroke-dasharray: 2 4; }
+.bar-chart .tick { fill: var(--muted); font-size: 11px; }
+.bar-chart .mark { fill: var(--accent); }
+.bar-chart .hit { fill: transparent; }
+.bar-chart .bar:hover .mark { fill: #6fe0ad; }
+.chart-tip { position: absolute; top: 0; padding: 4px 8px; border-radius: 6px;
+  background: #0d131b; border: 1px solid var(--line); color: var(--text); font-size: 12px; white-space: nowrap; pointer-events: none; }
+.ov-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.ov-data p { margin: 6px 0; word-break: break-word; }

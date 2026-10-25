@@ -89,6 +89,23 @@
           </form>
           <div id="db-orgs"></div>
         </div>
+        <div class="panel hidden" id="db-ov-panel">
+          <h2>Overview <span id="db-ov-name" class="mono"></span> <span id="db-ov-kind"></span>
+            <button id="db-ov-refresh" class="ghost small">Refresh</button>
+            <button id="db-ov-close" class="ghost small">Close</button></h2>
+          <div id="db-ov-cards" class="grid ov-cards"></div>
+          <div class="ov-charts">
+            <figure class="ov-chart"><figcaption>Sign-ups per day <span class="muted small">last 30 days</span></figcaption><div id="db-ov-signups"></div></figure>
+            <figure class="ov-chart"><figcaption>API requests per hour <span class="muted small">last 24 hours</span></figcaption><div id="db-ov-requests"></div></figure>
+          </div>
+          <div class="ov-lists">
+            <div><h3>Largest tables</h3><table class="list"><thead><tr><th>Table</th><th>Rows</th><th>Size</th><th>RLS</th></tr></thead><tbody id="db-ov-tables"></tbody></table></div>
+            <div><h3>Busiest endpoints <span class="muted small">24 h</span></h3><table class="list"><thead><tr><th>Request</th><th>Count</th></tr></thead><tbody id="db-ov-paths"></tbody></table>
+              <h3>Services</h3><table class="list"><thead><tr><th>Service</th><th>State</th><th>Memory</th></tr></thead><tbody id="db-ov-services"></tbody></table></div>
+          </div>
+          <div id="db-ov-advisors"></div>
+          <details class="small"><summary class="muted">Chart data as a table</summary><div id="db-ov-data" class="ov-data"></div></details>
+        </div>
         <div class="panel hidden" id="db-branch-panel">
           <h2>Branch <span id="db-branch-name" class="mono"></span> <button id="db-branch-close" class="ghost small">Close</button></h2>
           <p class="muted small">Creates <span id="db-branch-target" class="mono"></span>: a copy of every table with its columns,

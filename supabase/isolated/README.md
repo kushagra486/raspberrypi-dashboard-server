@@ -38,6 +38,12 @@ supabase/isolated/iso-project.sh funnel
 
 After a Supabase upgrade that adds a new login role, run `iso-project.sh lockdown` again.
 
+## Updating
+
+After `git pull`, run `supabase/isolated/iso-project.sh apply` once: it regenerates the proxy config
+(e.g. the request log used by Pi Console's Overview page: method, path without query string, status and
+duration only; never keys or headers; capped at 30 MB).
+
 ## Everyday
 
 - Create: Pi Console → Database → Projects → *+ New project* with **Own users & database** ticked,
@@ -46,5 +52,7 @@ After a Supabase upgrade that adds a new login role, run `iso-project.sh lockdow
 - Sign-in redirects for its app: `supabase/isolated/iso-project.sh site <name> https://<app>.vercel.app`
 - Work in it: pick it in the **Database** selector; table editor, SQL editor, auth users, Advisors,
   query insights and diagram then act on that project's database only.
+- Overview: Pi Console → Projects → *Overview*: users, sign-ups per day, active users, requests and errors
+  per hour, size, largest tables, last backup, Advisors.
 - Delete: Pi Console *Delete* (type the name) or `iso-project.sh remove <name> --drop-data`.
   A final backup is always written to `/mnt/data/backups/<name>/final-*.dump` first.

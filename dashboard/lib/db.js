@@ -240,6 +240,117 @@ class Database {
       order by c.relname`, [schema]);
   }
 
+  // ---- per-project overview ----------------------------------------------------
+  // project: 'iso:<name>' (own database, users, requests through iso-proxy) or a shared schema.
+
+  async projectOverview(project) {
+    const iso = String(project || '').startsWith('iso:') ? project.slice(4) : null;
+    let db, schema, users = null;
+    if (iso) {
+      if (!this.isoProject(iso)) throw sqlError(`No isolated project ${iso}`);
+      db = this.forDb(`proj_${iso}`); schema = 'public';
+    } else {
+      await this.appSchemaOrThrow(project).catch(e => { if (project !== 'public') throw e; });
+      db = this; schema = project;
+    }
+    // users: an isolated project's own pool; shared projects share one pool (shown, but not per project)
+    const usersQ = async (h) => {
+      if (!(await h.q(`select to_regclass('auth.users') is not null as ok`))[0].ok) return null;
+      const [u] = await h.q(`
+        select count(*)::int as total,
+               count(*) filter (where email_confirmed_at is not null)::int as confirmed,
+               count(*) filter (where created_at > now() - interval '30 days')::int as new30,
+               count(*) filter (where last_sign_in_at > now() - interval '7 days')::int as active7,
+               count(*) filter (where last_sign_in_at > now() - interval '30 days')::int as active30,
+               max(created_at) as last_signup
+        from auth.users`);
+      const series = await h.q(`
+        select to_char(d, 'YYYY-MM-DD') as day, count(u.id)::int as n
+        from generate_series(current_date - 29, current_date, interval '1 day') d
+        left join auth.users u on u.created_at >= d and u.created_at < d + interval '1 day'
+        group by d order by d`);
+      return { ...u, last_signup: jsonSafe(u.last_signup), signupsPerDay: series };
+    };
+    users = await usersQ(db);
+    const [size] = iso
+      ? await db.q(`select pg_database_size(current_database())::text as bytes`)
+      : await db.q(`select coalesce(sum(pg_total_relation_size(c.oid)), 0)::text as bytes from pg_class c
+          join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relkind in ('r','p','m')`, [schema]);
+    const tables = await db.q(`
+      select c.relname as name, pg_total_relation_size(c.oid)::text as size, c.relrowsecurity as rls
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = $1 and c.relkind in ('r','p')
+      order by pg_total_relation_size(c.oid) desc limit 10`, [schema]);
+    // exact counts (statistics drift), capped so a huge table cannot stall the page
+    const CAP = 1000000;
+    for (const t of tables) {
+      const [c] = await db.q(`select count(*)::int as n from (select 1 from ${escapeIdentifier(schema)}.${escapeIdentifier(t.name)} limit ${CAP + 1}) x`);
+      t.rows = c.n > CAP ? `${CAP}+` : String(c.n);
+    }
+    const [counts] = await db.q(`select count(*)::int as tables from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = $1 and c.relkind in ('r','p')`, [schema]);
+    const adv = (await db.advisors()).filter(a => iso || a.object.startsWith(`${schema}.`) || a.object === schema);
+    const advisors = { error: adv.filter(a => a.level === 'error').length, warn: adv.filter(a => a.level === 'warn').length,
+      info: adv.filter(a => a.level === 'info').length, top: adv.slice(0, 5).map(a => ({ level: a.level, title: a.title, object: a.object })) };
+
+    const out = {
+      project, kind: iso ? 'isolated' : 'shared', name: iso || schema,
+      database: iso ? `proj_${iso}` : 'postgres', schema,
+      users, sharedUsers: !iso,
+      size: Number(size.bytes), tables: counts.tables, topTables: tables, advisors,
+      backups: this.backupInfo(iso), requests: null, services: null,
+    };
+    if (iso && this.docker) {
+      out.services = await Promise.all(['auth', 'rest'].map(async k => {
+        const id = `iso-${iso}-${k}`;
+        return { name: k === 'auth' ? 'Auth (users)' : 'API (PostgREST)', container: id,
+          state: await this.docker.state(id), memory: await this.docker.memory(id) };
+      }));
+      out.requests = await this.proxyRequests(iso).catch(e => ({ error: e.message }));
+    }
+    return out;
+  }
+
+  backupInfo(iso) {
+    const dir = iso ? path.join(this.cfg.backupDir, iso) : this.cfg.backupDir;
+    try {
+      const files = fs.readdirSync(dir).filter(f => /^db-\d{8}-\d{6}\.dump$/.test(f))
+        .map(f => { const st = fs.statSync(path.join(dir, f)); return { name: f, size: st.size, modified: st.mtimeMs }; })
+        .sort((a, b) => b.modified - a.modified);
+      return { dir, count: files.length, newest: files[0] || null, note: iso ? null : 'part of the nightly main database backup' };
+    } catch { return { dir, count: 0, newest: null, note: iso ? null : 'part of the nightly main database backup' }; }
+  }
+
+  // Requests of the last 24 h for one isolated project, from iso-proxy's access log
+  // (the log keeps method, path without query, status and duration only: no keys).
+  async proxyRequests(iso) {
+    const text = await this.docker.logsSince(this.cfg.isoProxyContainer || 'iso-proxy', 24 * 3600, 200000);
+    const prefix = `/p/${iso}/`;
+    const now = Date.now(), hourMs = 3600 * 1000, start = now - 24 * hourMs;
+    const perHour = Array.from({ length: 24 }, (_, i) => ({ hour: new Date(start + (i + 1) * hourMs).toISOString(), n: 0, errors: 0 }));
+    let total = 0, e4 = 0, e5 = 0;
+    const durations = [], paths = new Map();
+    for (const line of text.split('\n')) {
+      if (!line.includes(prefix)) continue;
+      let j; try { j = JSON.parse(line); } catch { continue; }
+      const uri = j.request && j.request.uri;
+      if (!uri || !uri.startsWith(prefix) || typeof j.status !== 'number') continue;
+      const t = (j.ts || 0) * 1000;
+      if (t < start) continue;
+      total++;
+      if (j.status >= 500) e5++; else if (j.status >= 400) e4++;
+      const b = Math.min(23, Math.max(0, Math.floor((t - start) / hourMs)));
+      perHour[b].n++; if (j.status >= 500) perHour[b].errors++;
+      if (typeof j.duration === 'number') durations.push(j.duration * 1000);
+      const key = `${j.request.method} ${uri.slice(prefix.length - 1).replace(/\/[0-9a-f-]{36}(?=\/|$)/gi, '/:id')}`;
+      paths.set(key, (paths.get(key) || 0) + 1);
+    }
+    durations.sort((a, b) => a - b);
+    const p95 = durations.length ? Math.round(durations[Math.min(durations.length - 1, Math.floor(durations.length * 0.95))]) : null;
+    const top = [...paths.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, n]) => ({ path: k, n }));
+    return { total, clientErrors: e4, serverErrors: e5, p95ms: p95, perHour, top };
+  }
+
   // ---- connect an app (Vercel env block) ---------------------------------------
 
   async connectInfo(schema) {

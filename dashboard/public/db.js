@@ -320,6 +320,7 @@
         ? el('span', { class: 'tag exited' }, `${p.tables_without_rls} without RLS`)
         : el('span', { class: 'tag running' }, p.tables ? 'all on' : '–')),
       el('td', { class: 'row-actions' },
+        el('button', { class: 'ghost small', onclick: stop(() => openOverview(p.schema)) }, 'Overview'),
         el('button', { class: 'ghost small', onclick: stop(() => openConnect(p.schema)) }, 'Connect'),
         el('button', { class: 'ghost small danger', onclick: stop(async () => {
           if (prompt(`Delete the isolated project ${p.name}: its database, ALL its users and data? A final backup is kept in /mnt/data/backups/${p.name}. Type its name to confirm:`) !== p.name) return;
@@ -384,7 +385,9 @@
   // ---- project actions: connect, branch, reset / delete branch
   const stop = fn => ev => { ev.stopPropagation(); fn().catch(e => err(e.message)); };
   function projectActions(p) {
-    const acts = [el('button', { class: 'ghost small', onclick: stop(() => openConnect(p.schema)) }, 'Connect')];
+    const acts = [
+      el('button', { class: 'ghost small', onclick: stop(() => openOverview(p.schema)) }, 'Overview'),
+      el('button', { class: 'ghost small', onclick: stop(() => openConnect(p.schema)) }, 'Connect')];
     if (p.schema === 'public') return acts;
     if (p.schema.endsWith('_dev')) {
       const source = p.schema.slice(0, -4);
@@ -539,6 +542,116 @@
     try { await api(`/api/snippets?name=${encodeURIComponent(name)}`, { method: 'DELETE' }); await loadSnippets(); }
     catch (e) { err(e.message); }
   });
+
+  // ---- per-project overview
+  let ovProject = null;
+  const nfmt = n => Number(n).toLocaleString();
+  function statCard(label, value, sub, status) {
+    return el('div', { class: `card${status ? ` status-${status}` : ''}` },
+      el('div', { class: 'card-label' }, label),
+      el('div', { class: 'card-value' }, status === 'critical' ? '⚠ ' : '', String(value)),
+      sub ? el('div', { class: 'muted small' }, sub) : '');
+  }
+  // Single-series bar chart: one hue, 2px gaps, 4px rounded tops on the baseline, recessive axis,
+  // hover tooltip per bar (hit target = full column height).
+  function barChart(target, points, { unit, xLabel }) {
+    const W = 600, H = 160, L = 34, B = 22, T = 10, R = 6;
+    const max = Math.max(1, ...points.map(p => p.v));
+    const step = (W - L - R) / points.length, bw = Math.max(2, step - 2);
+    const y = v => H - B - (v / max) * (H - B - T);
+    const svgEl = (tag, a = {}, text) => { const n = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [k, v] of Object.entries(a)) n.setAttribute(k, v); if (text != null) n.textContent = text; return n; };
+    const root = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'bar-chart', role: 'img', 'aria-label': `${unit} chart` });
+    root.append(svgEl('line', { x1: L, x2: W - R, y1: H - B, y2: H - B, class: 'axis' }));
+    root.append(svgEl('line', { x1: L, x2: W - R, y1: T, y2: T, class: 'grid' }));
+    root.append(svgEl('text', { x: L - 6, y: T + 4, 'text-anchor': 'end', class: 'tick' }, nfmt(max)));
+    root.append(svgEl('text', { x: L - 6, y: H - B + 4, 'text-anchor': 'end', class: 'tick' }, '0'));
+    const tip = el('div', { class: 'chart-tip hidden' });
+    points.forEach((p, i) => {
+      const x = L + i * step + 1, top = y(p.v), h = H - B - top;
+      const g = svgEl('g', { class: 'bar' });
+      g.append(svgEl('rect', { x, y: T, width: step, height: H - B - T, class: 'hit' }));
+      if (p.v > 0) {
+        const r = Math.min(4, bw / 2, h);
+        g.append(svgEl('path', { class: 'mark', d: `M${x},${H - B} V${top + r} Q${x},${top} ${x + r},${top} H${x + bw - r} Q${x + bw},${top} ${x + bw},${top + r} V${H - B} Z` }));
+      }
+      g.addEventListener('mouseenter', () => {
+        tip.textContent = `${p.label}: ${nfmt(p.v)} ${unit}${p.extra ? ` · ${p.extra}` : ''}`;
+        tip.classList.remove('hidden');
+        const pct = ((x + bw / 2) / W) * 100;   // open towards the middle so it never leaves the chart
+        tip.style.left = `${pct}%`;
+        tip.style.transform = pct > 50 ? 'translateX(-100%)' : 'none';
+      });
+      g.addEventListener('mouseleave', () => tip.classList.add('hidden'));
+      root.append(g);
+    });
+    [0, Math.floor(points.length / 2), points.length - 1].forEach(i => {
+      if (!points[i]) return;
+      root.append(svgEl('text', { x: L + i * step + step / 2, y: H - 6, 'text-anchor': 'middle', class: 'tick' }, points[i].short));
+    });
+    target.replaceChildren(el('div', { class: 'chart-wrap' }, root, tip),
+      el('p', { class: 'muted small' }, xLabel));
+  }
+  async function openOverview(project) {
+    ovProject = project;
+    const o = await api(`/api/db/project-overview?project=${encodeURIComponent(project)}`);
+    $('#db-ov-name').textContent = o.name;
+    $('#db-ov-kind').replaceChildren(o.kind === 'isolated'
+      ? el('span', { class: 'tag claude' }, 'isolated: own users and database')
+      : el('span', { class: 'tag' }, 'shared database'));
+    const u = o.users, r = o.requests, b = o.backups;
+    const cards = [];
+    if (u) {
+      cards.push(statCard(o.sharedUsers ? 'Users (shared pool)' : 'Users', nfmt(u.total), `${nfmt(u.confirmed)} confirmed`));
+      cards.push(statCard('New sign-ups', nfmt(u.new30), 'last 30 days'));
+      cards.push(statCard('Active users', `${nfmt(u.active7)} / ${nfmt(u.active30)}`, 'signed in last 7 / 30 days'));
+    }
+    if (r && !r.error) {
+      cards.push(statCard('API requests', nfmt(r.total), r.p95ms != null ? `last 24 h · p95 ${r.p95ms} ms` : 'last 24 h'));
+      cards.push(statCard('Server errors', nfmt(r.serverErrors), `5xx · ${nfmt(r.clientErrors)} client errors (4xx)`, r.serverErrors ? 'critical' : null));
+    }
+    cards.push(statCard('Database size', fmtBytes(o.size), `${o.tables} table${o.tables === 1 ? '' : 's'}`));
+    cards.push(statCard('Last backup', b.newest ? fmtAge(b.newest.modified) : 'none yet',
+      b.newest ? `${fmtBytes(b.newest.size)} · ${b.count} kept` : (b.note || 'runs nightly at 03:30')));
+    const a = o.advisors;
+    cards.push(statCard('Advisors', a.error ? `${a.error} error${a.error === 1 ? '' : 's'}` : 'no errors',
+      `${a.warn} warnings · ${a.info} suggestions`, a.error ? 'critical' : null));
+    $('#db-ov-cards').replaceChildren(...cards);
+
+    const dataRows = [];
+    if (u) {
+      const pts = u.signupsPerDay.map(d => ({ v: d.n, label: d.day, short: d.day.slice(5) }));
+      barChart($('#db-ov-signups'), pts, { unit: 'sign-ups', xLabel: o.sharedUsers
+        ? 'Shared projects share one user pool: this counts all of its sign-ups. Isolated projects have their own.' : 'Users who signed up per day.' });
+      dataRows.push(['Sign-ups per day', ...pts.map(p => `${p.label}: ${p.v}`)]);
+    } else $('#db-ov-signups').replaceChildren(el('p', { class: 'muted' }, 'No user table in this database.'));
+    if (r && !r.error) {
+      const pts = r.perHour.map(h => { const d = new Date(h.hour); const t = `${String(d.getHours()).padStart(2, '0')}:00`;
+        return { v: h.n, label: `${d.toLocaleDateString()} ${t}`, short: t, extra: h.errors ? `${h.errors} server errors` : '' }; });
+      barChart($('#db-ov-requests'), pts, { unit: 'requests', xLabel: 'Requests through this project\'s own address (/p/…).' });
+      dataRows.push(['Requests per hour', ...pts.map(p => `${p.label}: ${p.v}`)]);
+    } else {
+      $('#db-ov-requests').replaceChildren(el('p', { class: 'muted' }, o.kind === 'isolated'
+        ? `Request log unavailable: ${(r && r.error) || 'proxy not running'}`
+        : 'Not tracked per project for shared projects: they share one API. Isolated projects show their own traffic here.'));
+    }
+    $('#db-ov-data').replaceChildren(...dataRows.map(([t, ...v]) => el('p', {}, el('b', {}, t), el('br'), v.join(' · '))));
+    $('#db-ov-tables').replaceChildren(...(o.topTables.length ? o.topTables.map(t => el('tr', {},
+      el('td', { class: 'mono' }, t.name), el('td', {}, String(t.rows).endsWith('+') ? `${nfmt(parseInt(t.rows, 10))}+` : nfmt(t.rows)), el('td', {}, fmtBytes(Number(t.size))),
+      el('td', {}, t.rls ? el('span', { class: 'tag running' }, 'on') : el('span', { class: 'tag exited' }, 'OFF'))))
+      : [el('tr', {}, el('td', { colspan: 4, class: 'muted' }, 'No tables yet.'))]));
+    $('#db-ov-paths').replaceChildren(...(r && !r.error && r.top.length ? r.top.map(x => el('tr', {}, el('td', { class: 'mono small' }, x.path), el('td', {}, nfmt(x.n))))
+      : [el('tr', {}, el('td', { colspan: 2, class: 'muted' }, o.kind === 'isolated' ? 'No requests in the last 24 h.' : 'Isolated projects only.'))]));
+    $('#db-ov-services').replaceChildren(...(o.services ? o.services.map(x => el('tr', {}, el('td', {}, x.name),
+      el('td', {}, el('span', { class: `tag ${/running|healthy/.test(x.state) ? 'running' : 'exited'}` }, x.state)),
+      el('td', {}, x.memory ? fmtBytes(x.memory.usage) : '–')))
+      : [el('tr', {}, el('td', { colspan: 3, class: 'muted' }, 'Uses the main Supabase services (see Services tab).'))]));
+    $('#db-ov-advisors').replaceChildren(...(a.top.length ? [el('h3', {}, 'Top advisor findings'),
+      ...a.top.map(x => el('p', { class: 'small' }, el('span', { class: `tag ${x.level === 'error' ? 'exited' : x.level === 'warn' ? 'warn' : ''}` }, x.level), ' ', x.title, ' ', el('span', { class: 'mono' }, x.object)))] : []));
+    $('#db-ov-panel').classList.remove('hidden');
+    $('#db-ov-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  $('#db-ov-close').addEventListener('click', () => { ovProject = null; $('#db-ov-panel').classList.add('hidden'); });
+  $('#db-ov-refresh').addEventListener('click', () => ovProject && openOverview(ovProject).catch(e => err(e.message)));
 
   // ---- connect an app
   async function openConnect(schema) {

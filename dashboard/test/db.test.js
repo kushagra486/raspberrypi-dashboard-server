@@ -385,3 +385,47 @@ test('isolated projects: create, list in org, scoped screens, connect, delete', 
   assert.strictEqual((await json('/api/db/users?db=proj_isoa')).status, 400);
   await json(`/api/db/orgs?id=${org.id}`, { method: 'DELETE' });
 });
+
+test('project overview: shared project and isolated project', { skip: !enabled }, async () => {
+  const shared = await json('/api/db/project-overview?project=janseva');
+  assert.strictEqual(shared.status, 200, JSON.stringify(shared.body));
+  const s = shared.body;
+  assert.strictEqual(s.kind, 'shared'); assert.strictEqual(s.sharedUsers, true);
+  assert.strictEqual(s.users.total, 2); assert.strictEqual(s.users.signupsPerDay.length, 30);
+  assert.strictEqual(s.tables, 1); assert.strictEqual(s.topTables[0].name, 'complaints'); assert.strictEqual(s.topTables[0].rows, '250');
+  assert.strictEqual(s.requests, null);                                   // not tracked per shared project
+  assert.ok(s.advisors.error === 0);                                      // lab's errors are not janseva's
+  const lab = (await json('/api/db/project-overview?project=lab')).body;
+  assert.ok(lab.advisors.error >= 2);
+  assert.strictEqual((await json('/api/db/project-overview?project=auth')).status, 400);
+  // isolated: own users only
+  await json('/api/db/isolated', { method: 'POST', body: JSON.stringify({ name: 'isoa' }) });
+  const iso = (await json('/api/db/project-overview?project=iso:isoa')).body;
+  assert.strictEqual(iso.kind, 'isolated'); assert.strictEqual(iso.database, 'proj_isoa');
+  assert.strictEqual(iso.users.total, 1); assert.strictEqual(iso.users.new30, 1);
+  assert.strictEqual(iso.users.signupsPerDay.at(-1).n, 1);
+  assert.ok(iso.requests && iso.requests.error);                          // no proxy in this test: reported, not thrown
+  assert.ok(!JSON.stringify(iso).includes('secret-service'));
+  await json('/api/db/isolated?name=isoa', { method: 'DELETE' });
+});
+
+test('request counts come from the proxy log, per project, without keys', async () => {
+  const { Database } = require('../lib/db');
+  const now = Date.now() / 1000;
+  const line = (uri, status, ago = 60, method = 'GET') => JSON.stringify({ ts: now - ago, request: { method, uri }, status, duration: 0.012 });
+  const log = [
+    line('/p/shop/rest/v1/orders', 200), line('/p/shop/rest/v1/orders', 200, 120),
+    line('/p/shop/auth/v1/token', 400, 30, 'POST'), line('/p/shop/rest/v1/items/3f2b8c1e-1111-4a2b-9c3d-1234567890ab', 503),
+    line('/p/shopping/rest/v1/x', 200),                         // another project with a similar name
+    line('/p/shop/rest/v1/old', 200, 25 * 3600),               // older than 24 h
+    'not json', '{"level":"info","msg":"server running"}',
+  ].join('\n');
+  const db = new Database({ db: {}, supabaseDir: '/nonexistent' }, { logsSince: async () => log });
+  const r = await db.proxyRequests('shop');
+  assert.deepStrictEqual({ total: r.total, e4: r.clientErrors, e5: r.serverErrors }, { total: 4, e4: 1, e5: 1 });
+  assert.strictEqual(r.perHour.length, 24);
+  assert.strictEqual(r.perHour.reduce((a, h) => a + h.n, 0), 4);
+  assert.deepStrictEqual(r.top[0], { path: 'GET /rest/v1/orders', n: 2 });
+  assert.ok(r.top.some(t => t.path === 'GET /rest/v1/items/:id'));          // ids folded together
+  assert.strictEqual(r.p95ms, 12);
+});
