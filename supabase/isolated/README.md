@@ -38,6 +38,23 @@ supabase/isolated/iso-project.sh funnel
 
 After a Supabase upgrade that adds a new login role, run `iso-project.sh lockdown` again.
 
+## Moving an existing shared project ("Make isolated")
+
+Pi Console → Projects → **Make isolated** on a shared project, or `iso-project.sh migrate <schema>`:
+
+1. creates the isolated project `<schema>` (own database, users, keys);
+2. copies the schema (tables, data, keys, indexes, RLS, policies, grants) in **one transaction**;
+3. checks every table's row count matches, and stops if not;
+4. serves it under the **same schema name**, so the app keeps `db: { schema: '<schema>' }` and only changes
+   URL + key (Pi Console → Connect).
+
+The shared copy is **not touched**. Once the app works on the new URL, **Retire shared copy**
+(`iso-project.sh retire-shared <schema> --confirm`) writes a final backup to
+`/mnt/data/backups/<schema>/shared-final-*.dump`, drops the shared schema and removes it from the main API.
+
+Refused (nothing changed) when rows point at users of the shared user pool: moving users between pools is not
+supported yet. Proof: `test-migrate.sh` (19 checks, throw-away schema, cleans up after itself).
+
 ## Updating
 
 After `git pull`, run `supabase/isolated/iso-project.sh apply` once: it regenerates the proxy config

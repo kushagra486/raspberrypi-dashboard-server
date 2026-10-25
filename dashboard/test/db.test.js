@@ -41,6 +41,18 @@ case "$1" in
     mkdir -p "$ISO_DIR/projects/$2"
     printf 'NAME=%s\\nDATABASE=proj_%s\\nANON_KEY=anon-%s\\nSERVICE_KEY=secret-service-%s\\nCREATED=now\\n' $2 $2 $2 $2 > "$ISO_DIR/projects/$2/project.env"
     echo "created isolated project $2"; echo "service key: secret-service-$2" ;;
+  migrate)
+    $P -d postgres -c "create database proj_$2"
+    $P -d proj_$2 -c "create schema auth; create table auth.users (id uuid primary key default gen_random_uuid(), email text, phone text,
+        created_at timestamptz default now(), last_sign_in_at timestamptz, email_confirmed_at timestamptz, encrypted_password text);"
+    pg_dump -h 127.0.0.1 -U supabase_admin -d postgres --schema=$2 | $P -d proj_$2 -v ON_ERROR_STOP=1 >/dev/null
+    mkdir -p "$ISO_DIR/projects/$2"
+    printf 'NAME=%s\nDATABASE=proj_%s\nANON_KEY=anon-%s\nSERVICE_KEY=secret-service-%s\nAPI_SCHEMAS=%s,public\nMIGRATED_FROM=%s\n' $2 $2 $2 $2 $2 $2 > "$ISO_DIR/projects/$2/project.env"
+    echo "   all tables match: items=3" ;;
+  retire-shared)
+    [ "$3" = --confirm ] || exit 1
+    $P -d postgres -c "drop schema $2 cascade"
+    echo "final backup of the shared copy: /backups/$2/shared-final.dump" ;;
   remove)
     [ "$3" = --drop-data ] || exit 1
     $P -d postgres -c "drop database proj_$2"
@@ -428,4 +440,38 @@ test('request counts come from the proxy log, per project, without keys', async 
   assert.deepStrictEqual(r.top[0], { path: 'GET /rest/v1/orders', n: 2 });
   assert.ok(r.top.some(t => t.path === 'GET /rest/v1/items/:id'));          // ids folded together
   assert.strictEqual(r.p95ms, 12);
+});
+
+test('make isolated: copy a shared project, connect with its schema, retire the shared copy', { skip: !enabled }, async () => {
+  const sql = (q) => json('/api/db/sql', { method: 'POST', body: JSON.stringify({ sql: q, readOnly: false }) });
+  await sql('drop schema if exists migt cascade; create schema migt; create table migt.items (id int primary key, name text); insert into migt.items values (1,\'a\'),(2,\'b\'),(3,\'c\'); alter table migt.items enable row level security');
+  const org = (await json('/api/db/orgs', { method: 'POST', body: JSON.stringify({ name: 'Mig Org' }) })).body;
+  await json('/api/db/projects/move', { method: 'POST', body: JSON.stringify({ schema: 'migt', orgId: org.id }) });
+  assert.strictEqual((await json('/api/db/make-isolated', { method: 'POST', body: JSON.stringify({ schema: 'migt_dev' }) })).status, 400);
+  assert.strictEqual((await json('/api/db/make-isolated', { method: 'POST', body: JSON.stringify({ schema: 'auth' }) })).status, 400);
+  const r = await json('/api/db/make-isolated', { method: 'POST', body: JSON.stringify({ schema: 'migt' }) });
+  assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+  assert.strictEqual(r.body.verified, 'items=3'); assert.strictEqual(r.body.sharedCopyKept, true);
+  assert.strictEqual((await json('/api/db/make-isolated', { method: 'POST', body: JSON.stringify({ schema: 'migt' }) })).status, 400);
+  // it lands in the same organization, flagged as having a shared copy, with its schema as the app schema
+  const inOrg = (await json('/api/db/orgs')).body.find(o => o.name === 'Mig Org').projects;
+  const iso = inOrg.find(p => p.kind === 'isolated' && p.name === 'migt');
+  assert.ok(iso); assert.strictEqual(iso.appSchema, 'migt'); assert.strictEqual(iso.sharedCopy, true); assert.strictEqual(iso.tables, 1);
+  assert.ok(inOrg.some(p => p.schema === 'migt' && p.kind !== 'isolated'));              // shared copy still listed
+  const c = (await json('/api/db/connect?schema=iso:migt')).body;
+  assert.match(c.env, /NEXT_PUBLIC_SUPABASE_SCHEMA=migt/); assert.match(c.snippet, /db: \{ schema:/);
+  const rows = (await json('/api/db/table?db=proj_migt&schema=migt&name=items')).body.rows;
+  assert.strictEqual(rows.length, 3);
+  const ov = (await json('/api/db/project-overview?project=iso:migt')).body;
+  assert.strictEqual(ov.schema, 'migt'); assert.strictEqual(ov.tables, 1);
+  // retire: only for migrated projects; shared copy gone, isolated copy intact
+  assert.strictEqual((await json('/api/db/retire-shared', { method: 'POST', body: JSON.stringify({ schema: 'janseva' }) })).status, 400);
+  const ret = await json('/api/db/retire-shared', { method: 'POST', body: JSON.stringify({ schema: 'migt' }) });
+  assert.strictEqual(ret.status, 200); assert.strictEqual(ret.body.finalBackup, '/backups/migt/shared-final.dump');
+  const after = (await json('/api/db/orgs')).body.find(o => o.name === 'Mig Org').projects;
+  assert.ok(!after.some(p => p.schema === 'migt' && p.kind !== 'isolated'));
+  assert.strictEqual(after.find(p => p.name === 'migt').sharedCopy, false);
+  assert.strictEqual((await json('/api/db/table?db=proj_migt&schema=migt&name=items')).body.rows.length, 3);
+  await json('/api/db/isolated?name=migt', { method: 'DELETE' });
+  await json(`/api/db/orgs?id=${org.id}`, { method: 'DELETE' });
 });

@@ -77,7 +77,7 @@ service they change.
 | O2 ✅ (built 2026-10-25, `supabase/isolated/`) | Optional **separate sign-up users** per project: own Auth + REST pair (~100 MB each, 3-5 max) with its **own JWT secret** (a shared secret would let users of one project into another), routed at `/p/<project>/auth/v1` and `/p/<project>/rest/v1`; Storage and Realtime stay shared | design + RAM measurement on the Pi first, then owner check-in |
 
 | O3 ✅ | Per-project **Overview** page: users, sign-ups per day, active users, API requests/errors per hour (isolated projects), size, largest tables, backups, Advisors | built 2026-10-25 |
-| O4 | **Make isolated** button: move an existing shared project into its own database | next |
+| O4 ✅ | **Make isolated** button: move an existing shared project into its own database (verified copy; shared copy kept until *Retire shared copy*) | built 2026-10-25 |
 
 ## C. Bigger pieces (cost RAM or need decisions)
 

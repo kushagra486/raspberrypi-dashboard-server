@@ -15,6 +15,8 @@ drop schema if exists auth, storage, janseva, shop, lab, blog, blog_dev, acme_st
 drop table if exists public.notes;
 drop database if exists proj_isoa;
 drop database if exists proj_isob;
+drop database if exists proj_migt;
+drop schema if exists migt cascade;
 
 create schema extensions;
 create extension if not exists pg_stat_statements with schema extensions;

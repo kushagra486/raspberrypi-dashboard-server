@@ -67,6 +67,13 @@ class Database {
     return env.NAME === name ? env : null;
   }
 
+  // schemas an isolated project's API serves; the first is the app's default
+  isoSchemas(name) {
+    const env = this.isoProject(name) || {};
+    const list = String(env.API_SCHEMAS || 'public').split(',').map(x => x.trim()).filter(x => /^[a-z_][a-z0-9_]*$/.test(x));
+    return list.length ? list : ['public'];
+  }
+
   isoNames() {
     try {
       return fs.readdirSync(path.join(this.isoDir(), 'projects'), { withFileTypes: true })
@@ -81,7 +88,7 @@ class Database {
     if (!m || !this.isoProject(m[1])) throw sqlError(`No isolated project database ${db}`);
     if (!this.children.has(db)) {
       const child = new Database(this.cfg, this.docker, { database: db, parent: this });
-      child.apiSchemas = () => ['public'];
+      child.apiSchemas = () => this.isoSchemas(m[1]);
       this.children.set(db, child);
     }
     return this.children.get(db);
@@ -91,16 +98,21 @@ class Database {
     const out = [];
     for (const name of this.isoNames()) {
       const env = this.isoProject(name);
-      const item = { kind: 'isolated', name, database: `proj_${name}`, created: env.CREATED || null };
+      const appSchema = this.isoSchemas(name)[0];
+      const item = { kind: 'isolated', name, database: `proj_${name}`, created: env.CREATED || null, appSchema,
+        migratedFrom: env.MIGRATED_FROM || null, sharedCopy: false };
+      if (item.migratedFrom) {
+        item.sharedCopy = (await this.q(`select 1 from pg_namespace where nspname = $1`, [item.migratedFrom]).catch(() => [])).length > 0;
+      }
       try {
         const db = this.forDb(item.database);
         const [st] = await db.q(`
           select pg_database_size(current_database())::text as size,
                  (select count(*) from auth.users)::int as users,
                  (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
-                    where n.nspname = 'public' and c.relkind in ('r','p'))::int as tables,
+                    where n.nspname = $1 and c.relkind in ('r','p'))::int as tables,
                  (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
-                    where n.nspname = 'public' and c.relkind in ('r','p') and not c.relrowsecurity)::int as tables_without_rls`);
+                    where n.nspname = $1 and c.relkind in ('r','p') and not c.relrowsecurity)::int as tables_without_rls`, [appSchema]);
         Object.assign(item, st);
       } catch (e) { item.error = e.message; }
       out.push(item);
@@ -126,6 +138,29 @@ class Database {
     await this.runIso(['create', name]);   // output contains keys: never sent to the browser
     if (orgId != null) await this.moveProject(`iso:${name}`, orgId);
     return { name, kind: 'isolated' };
+  }
+
+  // Copy a shared project (schema) into a new isolated project of the same name.
+  async makeIsolated(schema) {
+    await this.appSchemaOrThrow(schema);
+    if (schema.endsWith('_dev')) throw sqlError('Make the original project isolated, not its branch');
+    if (this.isoProject(schema)) throw sqlError(`An isolated project called ${schema} already exists`);
+    const orgs = await this.orgs();
+    const org = orgs.find(o => o.projects.some(p => p.schema === schema));
+    const out = await this.runIso(['migrate', schema], 15 * 60 * 1000);
+    if (org) await this.moveProject(`iso:${schema}`, org.id);
+    const match = (out.match(/all tables match: (.*)/) || [])[1] || '';
+    return { name: schema, verified: match.trim(), sharedCopyKept: true };
+  }
+
+  async retireShared(schema) {
+    const env = this.isoProject(schema);
+    if (!env || env.MIGRATED_FROM !== schema) throw sqlError(`${schema} has not been made isolated; nothing to retire`);
+    const out = await this.runIso(['retire-shared', schema, '--confirm'], 10 * 60 * 1000);
+    await this.ensureMeta();
+    await this.q(`delete from pi_console.projects where schema = $1`, [schema]);
+    const backup = (out.match(/final backup of the shared copy: (\S+)/) || [])[1] || null;
+    return { retired: schema, finalBackup: backup };
   }
 
   async deleteIsolated(name) {
@@ -248,7 +283,7 @@ class Database {
     let db, schema, users = null;
     if (iso) {
       if (!this.isoProject(iso)) throw sqlError(`No isolated project ${iso}`);
-      db = this.forDb(`proj_${iso}`); schema = 'public';
+      db = this.forDb(`proj_${iso}`); schema = this.isoSchemas(iso)[0];
     } else {
       await this.appSchemaOrThrow(project).catch(e => { if (project !== 'public') throw e; });
       db = this; schema = project;
@@ -568,19 +603,24 @@ class Database {
     if (!env) throw sqlError(`No isolated project ${name}`);
     const base = (this.supabaseEnv().SUPABASE_PUBLIC_URL || this.cfg.publicApiUrl || '').replace(/\/$/, '');
     const url = `${base}/p/${name}`;
+    const appSchema = this.isoSchemas(name)[0];
     const [st] = await this.forDb(`proj_${name}`).q(`
       select count(*) filter (where not c.relrowsecurity)::int as without_rls, count(*)::int as tables
-      from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind in ('r','p')`);
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relkind in ('r','p')`, [appSchema]);
+    const custom = appSchema !== 'public';
     return {
       schema: `iso:${name}`, isolated: true, url, key: env.ANON_KEY, exposed: true,
       tables: st.tables, tablesWithoutRls: st.without_rls,
       siteUrl: env.SITE_URL || '', redirects: (env.REDIRECT_URLS || '').split(',').filter(Boolean),
-      env: [`NEXT_PUBLIC_SUPABASE_URL=${url}`, `NEXT_PUBLIC_SUPABASE_ANON_KEY=${env.ANON_KEY}`].join('\n'),
+      appSchema,
+      env: [`NEXT_PUBLIC_SUPABASE_URL=${url}`, `NEXT_PUBLIC_SUPABASE_ANON_KEY=${env.ANON_KEY}`,
+        ...(custom ? [`NEXT_PUBLIC_SUPABASE_SCHEMA=${appSchema}`] : [])].join('\n'),
       snippet: [
         `import { createClient } from '@supabase/supabase-js'`, ``,
         `export const supabase = createClient(`,
         `  process.env.NEXT_PUBLIC_SUPABASE_URL,`,
-        `  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY`,
+        `  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY${custom ? ',' : ''}`,
+        ...(custom ? [`  { db: { schema: process.env.NEXT_PUBLIC_SUPABASE_SCHEMA } }`] : []),
         `)`,
         `// own users, own database: sign-ups here never mix with other projects`,
       ].join('\n'),

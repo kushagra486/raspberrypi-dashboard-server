@@ -310,9 +310,10 @@
         el('tbody', { 'data-org': String(o.id) }, ...rows))));
   }
   function isolatedRow(p, o) {
-    const open = () => useContext(p.database).then(() => openSchema('public'));
+    const open = () => useContext(p.database).then(() => openSchema(p.appSchema || 'public'));
     return el('tr', { class: 'clickable', onclick: () => open().catch(e => err(e.message)) },
-      el('td', {}, el('b', {}, p.name), ' ', el('span', { class: 'tag claude', title: 'Own database, own users, own keys' }, 'isolated')),
+      el('td', {}, el('b', {}, p.name), ' ', el('span', { class: 'tag claude', title: 'Own database, own users, own keys' }, 'isolated'),
+        p.sharedCopy ? el('span', { class: 'tag warn', title: 'The shared copy still exists until you retire it' }, ' shared copy kept') : ''),
       el('td', {}, p.error ? '?' : String(p.tables)),
       el('td', {}, p.error ? '?' : fmtBytes(Number(p.size))),
       el('td', {}, el('span', { class: 'tag running' }, p.users === 1 ? '1 user' : `${p.users ?? '?'} users`)),
@@ -322,6 +323,12 @@
       el('td', { class: 'row-actions' },
         el('button', { class: 'ghost small', onclick: stop(() => openOverview(p.schema)) }, 'Overview'),
         el('button', { class: 'ghost small', onclick: stop(() => openConnect(p.schema)) }, 'Connect'),
+        p.sharedCopy ? el('button', { class: 'ghost small danger', title: 'Drop the old shared copy (a final backup is kept)', onclick: stop(async () => {
+          if (prompt(`Retire the SHARED copy of ${p.name}? Do this only after your app uses the new URL and key. A final backup of the shared copy is kept in /mnt/data/backups/${p.name}. Type ${p.name} to confirm:`) !== p.name) return;
+          const r = await api('/api/db/retire-shared', { method: 'POST', body: { schema: p.name } });
+          alert(`Shared copy of ${p.name} retired.${r.finalBackup ? ` Final backup: ${r.finalBackup}` : ''}`);
+          await views.projects();
+        }) }, 'Retire shared copy') : '',
         el('button', { class: 'ghost small danger', onclick: stop(async () => {
           if (prompt(`Delete the isolated project ${p.name}: its database, ALL its users and data? A final backup is kept in /mnt/data/backups/${p.name}. Type its name to confirm:`) !== p.name) return;
           const r = await api(`/api/db/isolated?name=${encodeURIComponent(p.name)}`, { method: 'DELETE' });
@@ -405,6 +412,16 @@
       }) }, 'Delete'));
     } else {
       acts.push(el('button', { class: 'ghost small', onclick: stop(async () => openBranch(p.schema)) }, 'Branch'));
+      if (!orgCache.some(o => o.projects.some(x => x.kind === 'isolated' && x.name === p.schema))) {
+        acts.push(el('button', { class: 'ghost small', title: 'Copy into its own database with its own users and keys', onclick: stop(async () => {
+          if (!confirm(`Make "${p.schema}" isolated?\n\nIt is copied into its own database with its own sign-up users and API keys, and every table's row count is checked. The shared copy is NOT changed: your app keeps working until you switch it to the new URL and key, then press "Retire shared copy".\n\nTakes up to a minute.`)) return;
+          err(''); const btn = document.activeElement; if (btn) { btn.disabled = true; btn.textContent = 'Copying…'; }
+          const r = await api('/api/db/make-isolated', { method: 'POST', body: { schema: p.schema } });
+          await views.projects();
+          alert(`${p.schema} is now also an isolated project.\nVerified: ${r.verified || 'no tables'}.\n\nNext: Connect shows its new URL and key for your app. After the app works with them, press "Retire shared copy".`);
+          await openConnect(`iso:${p.schema}`);
+        }) }, 'Make isolated'));
+      }
     }
     return acts;
   }

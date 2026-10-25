@@ -142,6 +142,8 @@ async function api(req, res, url) {
         const { name, orgId } = await readJson(req);
         return send(res, 201, await rootDatabase.createIsolated(name, orgId ?? null));
       }
+      if (route === 'POST /api/db/make-isolated') return send(res, 200, await rootDatabase.makeIsolated((await readJson(req)).schema || ''));
+      if (route === 'POST /api/db/retire-shared') return send(res, 200, await rootDatabase.retireShared((await readJson(req)).schema || ''));
       if (route === 'DELETE /api/db/isolated') return send(res, 200, await rootDatabase.deleteIsolated(url.searchParams.get('name') || ''));
       if (route === 'GET /api/db/overview') return send(res, 200, { ...(await database.overview()), studioUrl: cfg.studioUrl });
       if (route === 'GET /api/db/projects') return send(res, 200, await database.projects());

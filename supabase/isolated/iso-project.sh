@@ -11,6 +11,10 @@
 #   ./iso-project.sh keys NAME              URL + public (anon) key; --secret also shows the service key
 #   ./iso-project.sh site NAME URL          sign-in redirect target (SITE_URL) for that project's app
 #   ./iso-project.sh remove NAME --drop-data   stop it, keep a final backup, delete database + roles
+#   ./iso-project.sh migrate SCHEMA         copy a SHARED project (schema in the main database) into a new
+#                                           isolated project of the same name; the shared copy is kept
+#   ./iso-project.sh retire-shared SCHEMA --confirm   after the app has switched: final backup of the shared
+#                                           schema, then drop it and remove it from the main API
 #   ./iso-project.sh apply                  regenerate proxy/compose from the project folders and (re)start
 #   ./iso-project.sh lockdown               only existing logins may connect to the main database
 #   ./iso-project.sh funnel                 publish /p on the internet (Tailscale Funnel), once
@@ -109,7 +113,7 @@ EOF
   if grep -q '^GOTRUE_SMTP_HOST=' "$d/auth.env"; then echo "GOTRUE_SMTP_SENDER_NAME=$(val "$n" DISPLAY_NAME)" >> "$d/auth.env"; fi
   cat > "$d/rest.env" <<EOF
 PGRST_DB_URI=postgres://iso_${n}_api:$(val "$n" API_DB_PASSWORD)@$DB_HOST:5432/proj_$n
-PGRST_DB_SCHEMAS=public
+PGRST_DB_SCHEMAS=$(val "$n" API_SCHEMAS | grep . || echo public)
 PGRST_JWT_SECRET=$(val "$n" JWT_SECRET)
 PGRST_DB_POOL=3
 PGRST_DB_USE_LEGACY_GUCS=false
@@ -225,6 +229,7 @@ AUTH_DB_PASSWORD=$auth_pw
 API_DB_PASSWORD=$api_pw
 SITE_URL=
 REDIRECT_URLS=
+API_SCHEMAS=public
 CREATED=$(date -Is)
 EOF
   )
@@ -252,7 +257,7 @@ SQL
   apply
   wait_ready "$n"
   echo "created isolated project $n (database proj_$n)"
-  keys "$n"
+  [ "${ISO_QUIET_KEYS:-}" = 1 ] || keys "$n"
 }
 
 keys() {  # NAME [--secret]
@@ -302,6 +307,95 @@ SQL
   echo "removed isolated project $target (final backup kept at $final)"
 }
 
+migrate() {  # SCHEMA: shared project -> new isolated project of the same name
+  local sch="$1"; need_name "$sch"
+  case "$sch" in *_dev) die "migrate the original project, not a branch";; esac
+  [ -d "$(pdir "$sch")" ] && die "an isolated project called $sch already exists"
+  [ "$(psql_main -d postgres -c "select count(*) from pg_namespace where nspname = '$sch'")" = 1 ] || die "no shared project (schema) $sch"
+  # rows that point at users of the SHARED user pool would lose their users: refuse instead
+  local refs
+  refs="$(psql_main -d postgres <<SQL
+select coalesce(string_agg(format('%s.%s(%s)', cn.nspname, c.relname, a.attname), ', '), '')
+from pg_constraint k join pg_class c on c.oid = k.conrelid join pg_namespace cn on cn.oid = c.relnamespace
+join pg_class t on t.oid = k.confrelid join pg_namespace tn on tn.oid = t.relnamespace
+join pg_attribute a on a.attrelid = k.conrelid and a.attnum = k.conkey[1]
+where k.contype = 'f' and cn.nspname = '$sch' and tn.nspname = 'auth';
+SQL
+)"
+  if [ -n "$refs" ]; then
+    local out n_users; out="$(psql_main -d postgres 2>&1 <<SQL
+do \$\$ declare r record; total bigint := 0; c bigint;
+begin
+  for r in select cn.nspname s, c.relname t, a.attname col
+    from pg_constraint k join pg_class c on c.oid = k.conrelid join pg_namespace cn on cn.oid = c.relnamespace
+    join pg_class tt on tt.oid = k.confrelid join pg_namespace tn on tn.oid = tt.relnamespace
+    join pg_attribute a on a.attrelid = k.conrelid and a.attnum = k.conkey[1]
+    where k.contype = 'f' and cn.nspname = '$sch' and tn.nspname = 'auth'
+  loop
+    execute format('select count(*) from %I.%I where %I is not null', r.s, r.t, r.col) into c;
+    total := total + c;
+  end loop;
+  raise notice 'USERREFS=%', total;
+end \$\$;
+SQL
+)"
+    n_users="$(sed -n 's/.*USERREFS=\([0-9]*\).*/\1/p' <<<"$out")"
+    [ "${n_users:-0}" = 0 ] || die "$n_users row(s) in $sch point at users of the shared user pool ($refs). Moving users between pools is not supported yet; nothing was changed."
+  fi
+  echo "== 1/4 creating isolated project $sch"
+  ISO_QUIET_KEYS=1 create "$sch" >/dev/null
+  echo "== 2/4 copying schema $sch (structure, data, policies, grants) in one transaction"
+  # extensions commonly used by Supabase apps, where they live in Supabase: schema "extensions"
+  psql_main -d "proj_$sch" <<SQL
+create schema if not exists extensions;
+grant usage on schema extensions to anon, authenticated, service_role;
+create extension if not exists "uuid-ossp" with schema extensions;
+create extension if not exists pgcrypto with schema extensions;
+SQL
+  if ! docker exec "$DB_HOST" pg_dump -h localhost -U supabase_admin -d postgres --schema="$sch" --no-publications --no-subscriptions \
+       | docker exec -i "$DB_HOST" psql -h localhost -U supabase_admin -d "proj_$sch" -v ON_ERROR_STOP=1 -q --single-transaction >/dev/null; then
+    echo "copy failed: rolling back by removing the new isolated project (the shared project is untouched)" >&2
+    ISO_DIR="$ISO_DIR" "$0" remove "$sch" --drop-data >/dev/null 2>&1 || true
+    die "migration of $sch failed; nothing changed"
+  fi
+  echo "== 3/4 verifying row counts"
+  local counts_sql="select string_agg(format('%s=%s', c.relname, (xpath('/row/n/text()', query_to_xml(format('select count(*) as n from %I.%I', n.nspname, c.relname), false, true, '')))[1]::text), ',' order by c.relname)
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = '$sch' and c.relkind in ('r','p')"
+  local before after
+  before="$(psql_main -d postgres -c "$counts_sql")"; after="$(psql_main -d "proj_$sch" -c "$counts_sql")"
+  if [ "$before" != "$after" ]; then
+    echo "shared:   $before" >&2; echo "isolated: $after" >&2
+    die "row counts differ: the isolated copy is kept for inspection; the shared project is untouched"
+  fi
+  echo "   all tables match: ${before:-no tables}"
+  echo "== 4/4 publishing schema $sch through the project's own API"
+  local f; f="$(pdir "$sch")/project.env"
+  sed -i "s|^API_SCHEMAS=.*|API_SCHEMAS=$sch,public|" "$f"
+  grep -q '^MIGRATED_FROM=' "$f" || echo "MIGRATED_FROM=$sch" >> "$f"
+  write_service_envs "$sch"
+  (cd "$ISO_DIR" && "${COMPOSE[@]}" up -d --force-recreate --no-deps "rest_$sch" >/dev/null 2>&1)
+  wait_ready "$sch"
+  echo "migrated: $sch now has its own database, users and keys. The shared copy is unchanged."
+  echo "next: point the app at the new URL and key (Pi Console > Connect), then: $0 retire-shared $sch --confirm"
+}
+
+retire_shared() {  # SCHEMA --confirm
+  local sch="$1"; need_name "$sch"
+  [ "${2:-}" = "--confirm" ] || die "this drops the SHARED copy of $sch; add --confirm"
+  [ "$(val "$sch" MIGRATED_FROM 2>/dev/null)" = "$sch" ] || die "$sch was not migrated to an isolated project; refusing"
+  [ "$(psql_main -d postgres -c "select count(*) from pg_namespace where nspname = '$sch'")" = 1 ] || die "no shared schema $sch (already retired?)"
+  mkdir -p "$BACKUP_DIR/$sch"
+  local final; final="$BACKUP_DIR/$sch/shared-final-$(date +%Y%m%d-%H%M%S).dump"
+  docker exec "$DB_HOST" pg_dump -h localhost -U supabase_admin -d postgres --schema="$sch" -Fc > "$final" || die "backup failed; nothing dropped"
+  echo "final backup of the shared copy: $final"
+  if [ -f "$MAIN_ENV" ]; then
+    PROJECT_DIR="$(dirname "$MAIN_ENV")" ENV_FILE="$MAIN_ENV" "$(cd "$(dirname "$0")/.." && pwd)/expose-schema.sh" remove "$sch" \
+      || echo "WARNING: could not update the main API for $sch (check PGRST_DB_SCHEMAS in $MAIN_ENV, then restart the rest service)" >&2
+  fi
+  psql_main -d postgres -c "set client_min_messages = warning" -c "drop schema \"$sch\" cascade" >/dev/null
+  echo "shared copy of $sch removed; the isolated project is the only copy now"
+}
+
 list() {
   local n
   for n in $(projects); do
@@ -322,9 +416,11 @@ case "$cmd" in
   keys)     keys "${1:-}" "${2:-}" ;;
   site)     set_site "${1:-}" "${2:-}" ;;
   remove)   remove "${1:-}" "${2:-}" ;;
+  migrate)  migrate "${1:-}" ;;
+  retire-shared) retire_shared "${1:-}" "${2:-}" ;;
   list)     list ;;
   apply)    for p in $(projects); do write_service_envs "$p"; done; apply ;;
   lockdown) lockdown ;;
   funnel)   funnel ;;
-  *) sed -n 2,19p "$0"; exit 1 ;;
+  *) sed -n 2,23p "$0"; exit 1 ;;
 esac
