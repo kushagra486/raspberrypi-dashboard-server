@@ -176,3 +176,18 @@ body.db-isolated #db-studio { display: none; }
   background: #0d131b; border: 1px solid var(--line); color: var(--text); font-size: 12px; white-space: nowrap; pointer-events: none; }
 .ov-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
 .ov-data p { margin: 6px 0; word-break: break-word; }
+
+/* Capacity */
+.stack-bar { display: flex; height: 22px; border-radius: 6px; overflow: hidden; background: #0b0f14; border: 1px solid var(--line); }
+.stack-bar > span { height: 100%; min-width: 2px; }
+.stack-bar > span + span { border-left: 2px solid var(--panel); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 10px 0 4px; font-size: 13px; }
+.legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.tag.good { background: rgba(62, 207, 142, .15); color: var(--accent); }
+.tag.critical { background: rgba(242, 95, 92, .15); color: var(--bad); }
+.tag.asleep { background: #1a2533; color: var(--muted); }
+.table-scroll { overflow-x: auto; }
+.advice { max-width: 320px; font-size: 13px; }
+.advice.change { color: var(--warn); }
+.plan-row input[type=text] { width: 100%; min-width: 120px; }
+.plan-out { margin-top: 12px; }

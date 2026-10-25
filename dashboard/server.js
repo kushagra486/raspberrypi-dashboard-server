@@ -12,6 +12,9 @@ const { Sessions } = require('./lib/sessions');
 const { Database } = require('./lib/db');
 const { Backups } = require('./lib/backups');
 const { Snippets } = require('./lib/snippets');
+const { Sleeper } = require('./lib/sleeper');
+const capacity = require('./lib/capacity');
+const placement = require('./lib/placement');
 
 const cfg = config.load();
 const auth = new Auth({ passwordHash: cfg.passwordHash, ttlHours: cfg.sessionTtlHours });
@@ -20,6 +23,7 @@ const sessions = new Sessions(cfg);
 const rootDatabase = new Database(cfg, docker);
 const backups = new Backups(cfg);
 const snippets = new Snippets(path.join(cfg.dataDir, 'snippets.json'));
+const sleeper = new Sleeper(cfg, docker, rootDatabase);
 
 const PUBLIC = path.join(config.ROOT, 'public');
 const VENDOR = {
@@ -96,6 +100,37 @@ async function api(req, res, url) {
   if (route === 'GET /api/system') return send(res, 200, await system.snapshot(cfg.disks));
   if (route === 'GET /api/links') return send(res, 200, cfg.links);
   if (route === 'GET /api/backups') return send(res, 200, await backups.list());
+  // ---- capacity: placement advisor, sleep / wake
+  if (route === 'GET /api/capacity') {
+    try { return send(res, 200, await capacity.gather({ db: rootDatabase, docker, sleeper, cfg })); }
+    catch (e) { return send(res, 502, { error: e.message }); }
+  }
+  if (route === 'POST /api/capacity/plan') {
+    try {
+      const { rows } = await readJson(req, 256 * 1024);
+      if (!Array.isArray(rows) || rows.length > 200) return send(res, 400, { error: 'rows: a list of up to 200 projects' });
+      const clean = rows.map(r => ({ name: String(r.name || '').slice(0, 60), ownUsers: !!r.ownUsers, storage: !!r.storage,
+        edgeFunctions: !!r.edgeFunctions, realtime: !!r.realtime, traffic: ['low', 'medium', 'high'].includes(r.traffic) ? r.traffic : 'low' }));
+      return send(res, 200, placement.planImport(clean, capacity.meminfoMb()));
+    } catch (e) { return send(res, 400, { error: e.message }); }
+  }
+  if (route === 'POST /api/capacity/mode' || route === 'POST /api/capacity/wake' || route === 'POST /api/capacity/sleep') {
+    try {
+      const { name, mode, minutes } = await readJson(req);
+      if (!rootDatabase.isoProject(name)) return send(res, 400, { error: 'No such isolated project' });
+      if (route.endsWith('/mode')) {
+        if (!['auto-sleep', 'always-on'].includes(mode)) return send(res, 400, { error: 'mode: auto-sleep or always-on' });
+        const mins = Math.min(Math.max(Number(minutes) || 30, 5), 10080);
+        await rootDatabase.runIso(['sleep-mode', name, mode === 'auto-sleep' ? 'auto' : 'off', String(mins)]);
+        sleeper.touch(name);
+        return send(res, 200, { name, mode, minutes: mins });
+      }
+      if (route.endsWith('/wake')) return send(res, 200, { name, awake: await sleeper.ensureAwake(name, 'woken from Pi Console') });
+      await sleeper.putToSleep(name, 'put to sleep from Pi Console');
+      return send(res, 200, { name, awake: false });
+    } catch (e) { return send(res, 400, { error: e.message }); }
+  }
+
   if (route === 'GET /api/snippets') return send(res, 200, snippets.list());
   if (route === 'POST /api/snippets' || route === 'DELETE /api/snippets') {
     try {
@@ -302,5 +337,6 @@ function attachTerminal(ws, target) {
 
 if (!cfg.passwordHash) console.warn('WARNING: no password set. Run `npm run set-password` before using the console.');
 server.listen(cfg.port, cfg.bind, () => console.log(`Pi Console on http://${cfg.bind}:${cfg.port}`));
+if (cfg.waker !== false) sleeper.start();
 
 module.exports = { server };

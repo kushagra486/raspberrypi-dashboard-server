@@ -9,6 +9,7 @@ One dashboard for the Pi, in the browser, on any device.
 | **Claude** | Start a **Claude Code** (or plain shell) session in any project folder, see all running sessions, open any of them in a full terminal in the browser, end them. Also creates new project folders. |
 | **Services** | Every Docker container (Supabase and anything else): state, ports, start / stop / restart, last 300 log lines. |
 | **Apps** | One-click links to Supabase Studio, the API, and anything you add in `config.json`. |
+| **Capacity** | Where the Pi's memory goes (Supabase, isolated projects, proxy, system), how many more always-on isolated projects fit, and per project: awake/asleep, memory, requests (24 h / 7 d), last use, mode. **Placement advice** from real traffic (busy → always on, light or quiet → auto-sleep) applied only when you click; **Wake** / **Sleep** buttons; the sleep and wake log. **Plan an import**: list projects you might move from Supabase cloud (own users? storage? edge functions? realtime? traffic?) and it says shared / isolated / stay on cloud and whether they fit. Nothing is moved by the planner. |
 | **Backups** | Database dumps in `/mnt/data/backups`, newest first. **Back up now**, **Test restore** (restores a dump into a throw-away database and compares row counts; live data untouched), **Download** a dump; when the last off-site copy and the last passing restore test happened. `.env` copies are never downloadable. |
 
 Sessions live in **tmux**. Closing the tab, losing Wi-Fi or restarting the dashboard only

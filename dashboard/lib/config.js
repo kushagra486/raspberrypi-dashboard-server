@@ -51,6 +51,10 @@ function load() {
     // Isolated projects (own database + users): folders and the script that manages them
     isoDir: raw.isoDir ? expandHome(raw.isoDir) : null,
     isoScript: raw.isoScript ? expandHome(raw.isoScript) : null,
+    // sleep / wake of auto-sleep isolated projects
+    waker: raw.waker !== false,
+    sleepCheckSec: Number(raw.sleepCheckSec || 60),
+    memoryGuardMb: Number(raw.memoryGuardMb || 400),
     db: {
       host: process.env.PI_CONSOLE_DB_HOST || raw.db?.host || null,   // null = look up the container IP
       port: Number(process.env.PI_CONSOLE_DB_PORT || raw.db?.port || 5432),

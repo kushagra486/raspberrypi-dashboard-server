@@ -23,6 +23,7 @@
       <button data-tab="services">Services</button>
       <button data-tab="apps">Apps</button>
       <button data-tab="backups">Backups</button>
+      <button data-tab="capacity">Capacity</button>
     </nav>
     <button id="logout" class="ghost">Sign out</button>
   </header>
@@ -260,6 +261,39 @@
           <tbody id="backups"></tbody></table>
       </div>
     </section>
+
+    <section id="tab-capacity" class="tab">
+      <p id="cap-error" class="error" role="alert"></p>
+      <div class="panel">
+        <h2>Memory <span id="cap-status" class="tag"></span> <button id="cap-refresh" class="ghost small">Refresh</button></h2>
+        <div id="cap-mem-bar" class="stack-bar" role="img"></div>
+        <div id="cap-mem-legend" class="legend"></div>
+        <p id="cap-headroom" class="muted small"></p>
+      </div>
+      <div class="panel">
+        <h2>Projects</h2>
+        <p class="muted small">Isolated projects in <b>auto-sleep</b> stop when idle and start again on the next request
+          (first request waits about a second). <b>Always on</b> never sleeps. Shared projects live in the main
+          database and cost no extra memory. Advice is from the last 7 days of traffic; nothing changes until you click.</p>
+        <div class="table-scroll"><table class="list"><thead><tr><th>Project</th><th>State</th><th>Memory</th><th>Requests 24 h / 7 d</th><th>Last used</th><th>Mode</th><th>Advice</th><th></th></tr></thead>
+          <tbody id="cap-projects"></tbody></table></div>
+      </div>
+      <div class="panel">
+        <h2>Plan an import</h2>
+        <p class="muted small">Before moving projects from Supabase cloud, list them here. Pi Console says where each
+          one should live (shared, isolated or stay on cloud) and whether the Pi has room. Nothing is moved.</p>
+        <div class="table-scroll"><table class="list"><thead><tr><th>Name</th><th>Own sign-up users</th><th>File storage</th><th>Edge functions</th><th>Realtime</th><th>Traffic</th><th></th></tr></thead>
+          <tbody id="cap-plan-rows"></tbody></table></div>
+        <div class="row"><button id="cap-plan-add" class="ghost">Add project</button><button id="cap-plan-go">Plan</button></div>
+        <div id="cap-plan-out"></div>
+      </div>
+      <div class="panel">
+        <h2>Sleep and wake log</h2>
+        <p id="cap-waker" class="muted small"></p>
+        <table class="list"><thead><tr><th>When</th><th>Project</th><th>Event</th><th>Why</th></tr></thead>
+          <tbody id="cap-events"></tbody></table>
+      </div>
+    </section>
   </main>
 
   <div id="term-view" class="term-view hidden">
@@ -275,5 +309,6 @@
   <script src="/vendor/addon-fit.js"></script>
   <script src="/static/app.js"></script>
   <script src="/static/db.js"></script>
+  <script src="/static/capacity.js"></script>
 </body>
 </html>

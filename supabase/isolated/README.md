@@ -55,6 +55,25 @@ The shared copy is **not touched**. Once the app works on the new URL, **Retire 
 Refused (nothing changed) when rows point at users of the shared user pool: moving users between pools is not
 supported yet. Proof: `test-migrate.sh` (19 checks, throw-away schema, cleans up after itself).
 
+## Sleep when idle (auto-sleep)
+
+Each isolated project costs ~45 MB while running. A project in **auto-sleep** is stopped after
+`SLEEP_AFTER_MIN` minutes without requests (default 30) and costs 0 MB until the next request, which
+starts it again and then succeeds (measured: ready in ~0.6 s, so the first request takes about a second).
+
+- Turn on / off: Pi Console → **Capacity**, or `iso-project.sh sleep-mode <name> auto [minutes]` /
+  `iso-project.sh sleep-mode <name> off`. New projects are **always on** until you choose.
+- How it wakes: before each request to an auto-sleep project, `iso-proxy` asks Pi Console's **waker**
+  (`/wake`, with a secret token from `waker.env`) to make sure the project is up. The waker listens only on
+  the Docker network gateway (e.g. `172.18.0.1:7071`): reachable from the proxy, not from the LAN or internet.
+  It answers only when Auth `/health` and PostgREST `/ready` (schema cache loaded) both return 200.
+- **Memory guard**: if free memory drops under 400 MB (`memoryGuardMb` in Pi Console's `config.json`),
+  the least recently used auto-sleep project is put to sleep, one per minute. Always-on projects are never touched.
+- Needs Pi Console running. If it is restarting, the proxy retries for up to 20 s; if it is down longer,
+  requests to a **sleeping** auto-sleep project fail (502) until it is back. Always-on projects do not depend on it.
+- A host firewall must allow the Docker network to reach port 7071 on the host (Pi Console's Capacity page
+  says "Waker not listening" if it cannot bind).
+
 ## Updating
 
 After `git pull`, run `supabase/isolated/iso-project.sh apply` once: it regenerates the proxy config
