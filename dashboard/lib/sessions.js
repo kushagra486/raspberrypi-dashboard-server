@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 
 const PREFIX = 'pc-';
+const SEP = '|:pc:|';
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 function tmux(args) {
@@ -37,14 +38,15 @@ class Sessions {
   async list() {
     let out = '';
     try {
+      // newer tmux (3.4+) prints control characters such as tab as "_", so use a printable separator
       out = await tmux(['list-sessions', '-F',
-        '#{session_name}\t#{session_created}\t#{session_attached}\t#{pane_current_path}\t#{@pc_kind}']);
+        ['#{session_name}', '#{session_created}', '#{session_attached}', '#{pane_current_path}', '#{@pc_kind}'].join(SEP)]);
     } catch (e) {
       if (/no server running|no sessions|error connecting/i.test(e.stderr || '')) return [];
       throw e;
     }
     return out.trim().split('\n').filter(Boolean)
-      .map(l => l.split('\t'))
+      .map(l => l.split(SEP))
       .filter(([name]) => name.startsWith(PREFIX))
       .map(([name, created, attached, cwd, kind]) => ({
         name: name.slice(PREFIX.length),
@@ -71,6 +73,18 @@ class Sessions {
     await tmux(['new-session', '-d', '-s', PREFIX + name, '-c', cwd, '-x', '200', '-y', '50', command]);
     await tmux(['set-option', '-t', PREFIX + name, '@pc_kind', kind]);
     return { name, kind, cwd };
+  }
+
+  // The one-click "Terminal" in the top bar: a login shell in the home folder, session "pi".
+  // Reused if it is already running, so your history and running commands are still there.
+  async terminal() {
+    const name = 'pi';
+    const found = (await this.list()).find(s => s.name === name);
+    if (found) return found;
+    const cwd = os.homedir();
+    await tmux(['new-session', '-d', '-s', PREFIX + name, '-c', cwd, '-x', '200', '-y', '50', `${this.cfg.shell} -l`]);
+    await tmux(['set-option', '-t', PREFIX + name, '@pc_kind', 'shell']);
+    return { name, kind: 'shell', cwd };
   }
 
   async kill(name) {

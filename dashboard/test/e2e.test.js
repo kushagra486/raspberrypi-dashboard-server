@@ -170,6 +170,23 @@ test('backups: status, run now, restore test, safe downloads', async () => {
 });
 
 
+test('top-bar Terminal opens one shell in the home folder and reuses it', async () => {
+  let existed = true;
+  try { execFileSync('tmux', ['has-session', '-t', 'pc-pi'], { stdio: 'ignore' }); } catch { existed = false; }
+  try {
+    assert.strictEqual((await call('/api/terminal', { method: 'POST', headers: { origin: 'https://evil.example' } })).status, 403);
+    const a = await (await call('/api/terminal', { method: 'POST' })).json();
+    assert.strictEqual(a.name, 'pi');
+    const b = await (await call('/api/terminal', { method: 'POST' })).json();
+    assert.strictEqual(b.name, 'pi');
+    const list = await (await call('/api/sessions')).json();
+    assert.strictEqual(list.filter(s => s.name === 'pi').length, 1, 'the second click reuses the same session');
+  } finally {
+    // never close a real terminal someone had open when the tests ran on the Pi
+    if (!existed) try { execFileSync('tmux', ['kill-session', '-t', 'pc-pi']); } catch {}
+  }
+});
+
 test('logout ends the session', async () => {
   await call('/api/logout', { method: 'POST' });
   assert.strictEqual((await call('/api/system')).status, 401);

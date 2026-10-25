@@ -238,6 +238,7 @@ async function api(req, res, url) {
 
   if (route === 'GET /api/sessions') return send(res, 200, await sessions.list());
   if (route === 'GET /api/folders') return send(res, 200, sessions.folders());
+  if (route === 'POST /api/terminal') return send(res, 200, await sessions.terminal());
   if (route === 'POST /api/sessions') return send(res, 201, await sessions.create(await readJson(req)));
   if (route === 'POST /api/folders') {
     const { root, name } = await readJson(req);

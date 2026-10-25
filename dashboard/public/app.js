@@ -152,7 +152,11 @@ function closeTerminal() {
   if (term) { term.dispose(); term = null; }
   $('#term-view').classList.add('hidden');
 }
-$('#term-close').addEventListener('click', () => { closeTerminal(); loaders.claude(); });
+$('#term-close').addEventListener('click', () => { closeTerminal(); if (current === 'claude') loaders.claude(); });
+$('#open-terminal').addEventListener('click', async () => {
+  try { const s = await api('/api/terminal', { method: 'POST' }); openTerminal(s.name); }
+  catch (e) { alert(`Terminal: ${e.message}`); }
+});
 
 // ---- docker services
 loaders.services = async () => {
