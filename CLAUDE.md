@@ -54,7 +54,8 @@ Mention the relevant ones when they matter; don't nag every message.
   crash. Fix: `kernel=kernel8.img` in `/boot/firmware/config.txt` + reboot (ask first).
 - Supabase idles ~2-2.5 GB; measure with `docker stats` / `free -h` before Layer 3.
 - Multiple apps share one Supabase via schemas (`supabase/new-project.sh`); RLS on every table.
-- Restore from a full `pg_dump` into a fresh install is untested (dump is readable with `pg_restore --list`).
+- Restore: `supabase/restore-test.sh` **passed 2026-10-25** (dump restored into a scratch DB in the same Postgres, row counts match). A restore onto a *fresh* Pi install is still untested.
+- Off-site backups: **private repo `kushagra486/pi-backups` since 2026-10-25** (`supabase/offsite-github-sync.sh`, cron 04:15, age-encrypted, write-only deploy key `~/.ssh/pi_backups_deploy`; decryption key in owner's Bitwarden + `~/.config/pi-backup/age.key`).
 - Kong's HTTPS listener binds 0.0.0.0:8443 (LAN-reachable, self-signed; not internet). Owner to decide whether to bind it to 127.0.0.1.
 - Supabase `.env` was pasted into a private Claude chat 2026-10-25; owner decided **not** to rotate (accepted risk). Don't push rotation again; rotate only if he asks or a key is seen outside that chat.
 - Power supply under-voltage at every boot (`vcgencmd get_throttled` = 0x50000) until the owner swaps the PSU.

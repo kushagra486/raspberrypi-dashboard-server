@@ -27,6 +27,8 @@ relevant, never do them for him, and tick them off here once he confirms.
 
 ## Done
 
+- [x] Off-site encrypted backups to private GitHub repo `pi-backups`; decryption key in Bitwarden; restore test passed (2026-10-25)
+
 - [x] Decision 2026-10-25: **no secret rotation** after the `.env` was pasted into a private Claude chat (owner accepts the risk; no apps use the keys yet). Revisit only if he asks.
 
 - [x] Pendrive formatted ext4 at `/mnt/data` (2026-10-24)
