@@ -56,7 +56,7 @@ Mention the relevant ones when they matter; don't nag every message.
 - Multiple apps share one Supabase via schemas (`supabase/new-project.sh`); RLS on every table.
 - Restore from a full `pg_dump` into a fresh install is untested (dump is readable with `pg_restore --list`).
 - Kong's HTTPS listener binds 0.0.0.0:8443 (LAN-reachable, self-signed; not internet). Owner to decide whether to bind it to 127.0.0.1.
-- Supabase secrets were pasted into a chat 2026-10-25: rotation pending (docs/TODO.md).
+- Supabase `.env` was pasted into a private Claude chat 2026-10-25; owner decided **not** to rotate (accepted risk). Don't push rotation again; rotate only if he asks or a key is seen outside that chat.
 - Power supply under-voltage at every boot (`vcgencmd get_throttled` = 0x50000) until the owner swaps the PSU.
 
 ## Git

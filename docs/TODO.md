@@ -5,12 +5,7 @@ relevant, never do them for him, and tick them off here once he confirms.
 
 ## Open
 
-- [ ] **Rotate the Supabase secrets** (the `.env` contents were pasted into a chat on
-      2026-10-25). Owner sends the rotation request in a Claude session that can reach the
-      Pi; that session takes a backup first and never prints the new values. Afterwards:
-      re-save the "Supabase .env backup" parts 1–2, "Supabase keys (Pi)" and the Studio
-      password in Bitwarden (the saved ones hold the old values).
-- [ ] **Save passwords in a password manager** (mostly done 2026-10-25; redo the Supabase entries after rotation) (Bitwarden or KeePassXC), then delete
+- [ ] **Save passwords in a password manager** (done 2026-10-25) (Bitwarden or KeePassXC), then delete
       `~/pi-console-password.txt` on the Pi. Steps:
   1. `ssh stdio@raspberrypi`
   2. Pi Console: `cat ~/pi-console-password.txt` → save as "Pi Console",
@@ -31,6 +26,8 @@ relevant, never do them for him, and tick them off here once he confirms.
       pre-approved key tagged `tag:claude` → replace `TS_AUTHKEY` in the cloud environment.
 
 ## Done
+
+- [x] Decision 2026-10-25: **no secret rotation** after the `.env` was pasted into a private Claude chat (owner accepts the risk; no apps use the keys yet). Revisit only if he asks.
 
 - [x] Pendrive formatted ext4 at `/mnt/data` (2026-10-24)
 - [x] Tailscale login, Funnel enabled, access policy applied, Pi tagged `tag:pi` (2026-10-24)
