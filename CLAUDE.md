@@ -16,6 +16,14 @@ projects never pause (replacing Supabase cloud free tier). If you are running
   broader access than described here, or before switching tools (e.g. Coolify → Dokploy).
 - **Tell honest limits.** He prefers that to reassurance.
 - If what you find on the Pi contradicts this file, say so and ask.
+- **Run it yourself (owner decision 2026-10-25).** Sessions that can reach the Pi
+  (`source tailscale/claude-connect.sh`, `ssh pi`) do routine work themselves instead of
+  handing the owner commands: `git pull` + deploy steps, restarts, health checks, logs,
+  tests, backups, applying reviewed migrations. Report what you ran and the result.
+  **Still ask first** for anything destructive or hard to undo (dropping data/projects,
+  restores over live data, formatting, deleting backups), anything that exposes something
+  new (Funnel paths, ports), rotating secrets, OS upgrades/reboots, and new paid/third-party
+  services. Never print secrets in output.
 
 ## Skill
 

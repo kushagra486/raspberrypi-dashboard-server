@@ -55,6 +55,7 @@ above and give him the exact commands to run himself.
 | Backups | `pi.sh backups`, `pi.sh backup-now` |
 | Logs | `pi.sh logs supabase-rest 100` (containers: `supabase-db`, `-auth`, `-rest`, `-storage`, `-kong`, `-studio`, `-meta`, `-pooler`, `-edge-functions`, `realtime-dev.supabase-realtime`) |
 | Anything else | `ssh pi '...'` (passwordless sudo; Docker; `cd ~/supabase-project && sh run.sh status\|restart\|logs`) |
+| Deploying | Do it yourself (owner decision 2026-10-25): `ssh pi 'cd ~/raspberrypi-dashboard-server && git pull'`, then the steps the change needs (`cd dashboard && npm ci && sudo systemctl restart pi-console`; `supabase/isolated/iso-project.sh apply`). Ask first before destructive, exposing, secret-rotating or reboot actions (see CLAUDE.md) |
 
 Wiring an app:
 1. `pi.sh new-app myapp`
