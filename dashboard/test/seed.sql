@@ -7,9 +7,11 @@ do $$ begin
     create role supabase_admin login superuser password 'test-db-pass';
   end if;
   if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
+  if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+  if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;
 end $$;
 
-drop schema if exists auth, storage, janseva, shop, lab, extensions cascade;
+drop schema if exists auth, storage, janseva, shop, lab, blog, blog_dev, extensions cascade;
 drop table if exists public.notes;
 
 create schema extensions;
@@ -63,5 +65,23 @@ create policy n on lab.nopk for select using (true);
 create table lab.forgot (id int primary key);                             -- policy exists, RLS off
 create policy f on lab.forgot for select using (true);
 create function lab.add_one(i int) returns int language sql as 'select i + 1'; -- mutable search_path
+
+-- Branching fixtures: serial + identity ids, generated column, FKs, RLS policy referring to
+-- another table in the schema, plus a view, a function and a trigger (not copied, reported)
+create schema blog;
+create table blog.posts (id serial primary key, title text not null, slug text generated always as (lower(title)) stored);
+create table blog.comments (id bigint generated always as identity primary key,
+  post_id int not null references blog.posts(id) on delete cascade, body text, author uuid references auth.users(id));
+create index on blog.comments (post_id);
+alter table blog.posts enable row level security;
+alter table blog.comments enable row level security;
+create policy "read posts" on blog.posts for select to anon using (true);
+create policy "comments on visible posts" on blog.comments for select to anon, authenticated
+  using (exists (select 1 from blog.posts p where p.id = post_id));
+insert into blog.posts (title) values ('Hello'), ('Second'), ('Third');
+insert into blog.comments (post_id, body) select 1 + (g % 3), 'c' || g from generate_series(1, 10) g;
+create view blog.recent as select * from blog.posts order by id desc limit 10;
+create function blog.touch() returns trigger language plpgsql as 'begin return new; end';
+create trigger touch before update on blog.posts for each row execute function blog.touch();
 
 analyze;

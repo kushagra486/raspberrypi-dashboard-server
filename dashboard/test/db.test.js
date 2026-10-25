@@ -21,9 +21,11 @@ const json = async (p, opts) => { const r = await call(p, opts); return { status
 before(async () => {
   if (!enabled) return;
   fs.writeFileSync(path.join(tmp, '.env'), 'PGRST_DB_SCHEMAS=public,graphql_public,janseva,lab\nPOSTGRES_PASSWORD=test-db-pass\nSUPABASE_PUBLIC_URL=https://pi.example\nSUPABASE_PUBLISHABLE_KEY=sb_publishable_test\nSUPABASE_SECRET_KEY=sb_secret_test\n');
+  fs.writeFileSync(path.join(tmp, 'expose.sh'), `#!/bin/sh\necho "$1 $2" >> ${path.join(tmp, 'expose.log')}\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({
     bind: '127.0.0.1', port, projectRoots: [tmp], supabaseDir: tmp, disks: ['/'],
     dockerSocket: path.join(tmp, 'none.sock'), db: { host: '127.0.0.1', port: 5432 },
+    exposeSchemaScript: path.join(tmp, 'expose.sh'), dataDir: path.join(tmp, 'data'),
   }));
   proc = spawn(process.execPath, ['server.js'], {
     cwd: path.join(__dirname, '..'),
@@ -210,4 +212,65 @@ test('CSV parser handles quotes, newlines and BOM', () => {
   assert.deepStrictEqual(csvlib.parse('﻿a,b\r\n"x,1","y ""z"""\n\n"multi\nline",\n'), [['a', 'b'], ['x,1', 'y "z"'], ['multi\nline', '']]);
   assert.throws(() => csvlib.parse('a\n"open'), /unterminated/);
   assert.strictEqual(csvlib.stringify(['a', 'b'], [[' lead', 'q"x'], [null, { k: 1 }]]), 'a,b\r\n" lead","q""x"\r\n,"{""k"":1}"\r\n');
+});
+
+test('branch an app: structure, data, sequences, FKs, policies; reset; delete', { skip: !enabled }, async () => {
+  const sql = async (q, readOnly = true) => (await json('/api/db/sql', { method: 'POST', body: JSON.stringify({ sql: q, readOnly }) })).body;
+  const b = await json('/api/db/branch', { method: 'POST', body: JSON.stringify({ schema: 'blog', withData: true }) });
+  assert.strictEqual(b.status, 200, JSON.stringify(b.body));
+  assert.deepStrictEqual({ t: b.body.tables, r: b.body.rows, p: b.body.policies }, { t: 2, r: 13, p: 2 });
+  assert.deepStrictEqual(b.body.notCopied, { views: 1, functions: 1, triggers: 1 });
+  assert.match(fs.readFileSync(path.join(tmp, 'expose.log'), 'utf8'), /^add blog_dev$/m);
+  // own sequences: inserting into the branch does not touch the original
+  await sql(`insert into blog_dev.posts (title) values ('Dev only'); insert into blog_dev.comments (post_id, body) values (1, 'x')`, false);
+  assert.deepStrictEqual((await sql(`select max(id) from blog_dev.posts`)).rows[0], [4]);
+  assert.deepStrictEqual((await sql(`select max(id)::int from blog_dev.comments`)).rows[0], [11]);
+  assert.deepStrictEqual((await sql(`select count(*)::int from blog.posts`)).rows[0], [3]);
+  assert.deepStrictEqual((await sql(`select last_value::int from blog.posts_id_seq`)).rows[0], [3]);
+  // generated column regenerated, FK points inside the branch, external FK kept, policy rewritten
+  assert.deepStrictEqual((await sql(`select slug from blog_dev.posts where id = 4`)).rows[0], ['dev only']);
+  const fk = (await sql(`select confrelid::regclass::text from pg_constraint where conrelid = 'blog_dev.comments'::regclass and contype = 'f' order by 1`)).rows.map(r => r[0]);
+  assert.deepStrictEqual(fk, ['auth.users', 'blog_dev.posts']);
+  const pol = (await sql(`select qual from pg_policies where schemaname = 'blog_dev' and tablename = 'comments'`)).rows[0][0];
+  assert.match(pol, /blog_dev\.posts/); assert.ok(!/[^_]blog\.posts/.test(pol));
+  assert.deepStrictEqual((await sql(`select relrowsecurity from pg_class where oid = 'blog_dev.posts'::regclass`)).rows[0], [true]);
+  assert.deepStrictEqual((await sql(`select has_table_privilege('anon', 'blog_dev.posts', 'select')`)).rows[0], [true]);
+  // second branch refused; reset restores the original's rows
+  assert.strictEqual((await json('/api/db/branch', { method: 'POST', body: JSON.stringify({ schema: 'blog' }) })).status, 400);
+  const r = await json('/api/db/branch', { method: 'POST', body: JSON.stringify({ schema: 'blog', withData: false, reset: true }) });
+  assert.strictEqual(r.status, 200); assert.strictEqual(r.body.rows, 0);
+  assert.deepStrictEqual((await sql(`select count(*)::int from blog_dev.posts`)).rows[0], [0]);
+  // only *_dev schemas can be deleted, never system or real app schemas
+  assert.strictEqual((await json('/api/db/branch?schema=blog', { method: 'DELETE' })).status, 400);
+  assert.strictEqual((await json('/api/db/branch?schema=auth', { method: 'DELETE' })).status, 400);
+  assert.strictEqual((await json('/api/db/branch', { method: 'POST', body: JSON.stringify({ schema: 'auth' }) })).status, 400);
+  const del = await json('/api/db/branch?schema=blog_dev', { method: 'DELETE' });
+  assert.strictEqual(del.status, 200);
+  assert.deepStrictEqual((await sql(`select count(*)::int from pg_namespace where nspname = 'blog_dev'`)).rows[0], [0]);
+  assert.match(fs.readFileSync(path.join(tmp, 'expose.log'), 'utf8'), /^remove blog_dev$/m);
+});
+
+test('schema diagram: tables, columns, keys and foreign keys', { skip: !enabled }, async () => {
+  const { status, body } = await json('/api/db/diagram?schema=blog');
+  assert.strictEqual(status, 200);
+  assert.deepStrictEqual(body.tables.map(t => t.name), ['comments', 'posts', 'recent']);
+  assert.ok(body.tables.find(t => t.name === 'recent').view);
+  assert.ok(body.tables.find(t => t.name === 'posts').columns.find(c => c.name === 'id').pk);
+  const fk = body.fks.find(f => f.to_table === 'posts');
+  assert.deepStrictEqual({ from: fk.from_table, cols: fk.from_cols, to: fk.to_cols }, { from: 'comments', cols: ['post_id'], to: ['id'] });
+  assert.ok(body.fks.find(f => f.to_schema === 'auth' && f.to_table === 'users'));
+});
+
+test('saved SQL snippets persist on the server', { skip: !enabled }, async () => {
+  assert.deepStrictEqual((await json('/api/snippets')).body, []);
+  assert.strictEqual((await json('/api/snippets', { method: 'POST', body: JSON.stringify({ name: 'open complaints', sql: 'select 1' }) })).status, 200);
+  await json('/api/snippets', { method: 'POST', body: JSON.stringify({ name: 'open complaints', sql: 'select 2' }) });   // overwrite
+  await json('/api/snippets', { method: 'POST', body: JSON.stringify({ name: 'a first', sql: 'select 3' }) });
+  const list = (await json('/api/snippets')).body;
+  assert.deepStrictEqual(list.map(s => [s.name, s.sql]), [['a first', 'select 3'], ['open complaints', 'select 2']]);
+  assert.strictEqual((fs.statSync(path.join(tmp, 'data', 'snippets.json')).mode & 0o777), 0o600);
+  assert.strictEqual((await json('/api/snippets', { method: 'POST', body: JSON.stringify({ name: '', sql: 'x' }) })).status, 400);
+  assert.strictEqual((await json('/api/snippets?name=a%20first', { method: 'DELETE' })).status, 200);
+  assert.strictEqual((await json('/api/snippets?name=nope', { method: 'DELETE' })).status, 404);
+  assert.strictEqual((await json('/api/db/migrations')).body.length, 0);   // no supabase_migrations schema in the seed
 });

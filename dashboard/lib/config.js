@@ -45,6 +45,9 @@ function load() {
     // Backups tab actions (defaults: the installed nightly script and this repo's restore test)
     backupScript: raw.backupScript ? expandHome(raw.backupScript) : null,
     restoreTestScript: raw.restoreTestScript ? expandHome(raw.restoreTestScript) : null,
+    exposeSchemaScript: raw.exposeSchemaScript ? expandHome(raw.exposeSchemaScript) : null,
+    // Where Pi Console keeps its own small state (saved SQL snippets)
+    dataDir: expandHome(raw.dataDir || '~/.local/share/pi-console'),
     db: {
       host: process.env.PI_CONSOLE_DB_HOST || raw.db?.host || null,   // null = look up the container IP
       port: Number(process.env.PI_CONSOLE_DB_PORT || raw.db?.port || 5432),

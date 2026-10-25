@@ -87,6 +87,15 @@
           <table class="list"><thead><tr><th>Schema</th><th>Tables</th><th>Size</th><th>API</th><th>RLS</th><th></th></tr></thead>
             <tbody id="db-project-list"></tbody></table>
         </div>
+        <div class="panel hidden" id="db-branch-panel">
+          <h2>Branch <span id="db-branch-name" class="mono"></span> <button id="db-branch-close" class="ghost small">Close</button></h2>
+          <p class="muted small">Creates <span id="db-branch-target" class="mono"></span>: a copy of every table with its columns,
+            keys, indexes, row level security and policies, exposed through the API. Point a preview deployment at it
+            (<span class="mono">NEXT_PUBLIC_SUPABASE_SCHEMA</span>) and test freely; the original is never touched.
+            Views, functions and triggers are not copied.</p>
+          <label class="check"><input type="checkbox" id="db-branch-data"> Copy the rows too (max 500 MB)</label>
+          <div class="row"><button id="db-branch-go">Create branch</button> <span id="db-branch-msg" class="muted small"></span></div>
+        </div>
         <div class="panel hidden" id="db-connect-panel">
           <h2>Connect <span id="db-connect-name" class="mono"></span> <button id="db-connect-close" class="ghost small">Close</button></h2>
           <div id="db-connect-warn"></div>
@@ -100,9 +109,16 @@
           <p id="db-connect-redirects" class="muted small"></p>
         </div>
         <div class="panel hidden" id="db-tables-panel">
-          <h2>Tables in <span id="db-schema-name" class="mono"></span></h2>
+          <h2>Tables in <span id="db-schema-name" class="mono"></span> <button id="db-diagram-open" class="ghost small">Diagram</button></h2>
           <table class="list"><thead><tr><th>Name</th><th>Kind</th><th>Rows (est.)</th><th>Size</th><th>RLS</th><th>Policies</th></tr></thead>
             <tbody id="db-table-list"></tbody></table>
+        </div>
+        <div class="panel hidden" id="db-diagram-panel">
+          <h2>Diagram of <span id="db-diagram-name" class="mono"></span>
+            <button id="db-diagram-svg" class="ghost small">Download SVG</button>
+            <button id="db-diagram-close" class="ghost small">Close</button></h2>
+          <p class="muted small">Arrows go from a foreign key to the table it points at. Click a table to open it.</p>
+          <div class="scroll diagram-wrap" id="db-diagram"></div>
         </div>
         <div class="panel hidden" id="db-table-panel">
           <h2><span id="db-table-name" class="mono"></span> <button id="db-table-close" class="ghost small">Close</button></h2>
@@ -130,6 +146,11 @@
 
       <div id="db-sql" class="db-view">
         <div class="panel">
+          <div class="row snippet-bar">
+            <select id="snip-list" aria-label="Saved snippets"><option value="">Saved snippets…</option></select>
+            <button id="snip-save" class="ghost small">Save as…</button>
+            <button id="snip-delete" class="ghost small">Delete</button>
+          </div>
           <textarea id="sql-input" spellcheck="false" placeholder="select * from public.my_table limit 10;"></textarea>
           <div class="row sql-bar">
             <button id="sql-run">Run <span class="muted small">Ctrl+Enter</span></button>
@@ -139,6 +160,10 @@
           <p id="sql-error" class="error"></p>
           <div class="scroll"><table class="list grid-data" id="sql-result"></table></div>
         </div>
+        <details class="panel" id="mig-panel">
+          <summary><b>Migration history</b> <span class="muted small">applied with the Supabase CLI (supabase db push)</span></summary>
+          <table class="list"><thead><tr><th>Version</th><th>Name</th><th>Statements</th></tr></thead><tbody id="mig-list"></tbody></table>
+        </details>
       </div>
 
       <div id="db-users" class="db-view">

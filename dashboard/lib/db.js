@@ -184,6 +184,183 @@ class Database {
     };
   }
 
+  // ---- branches: <app>_dev copies of an app schema ---------------------------
+  // Copies tables (columns, defaults, constraints, indexes, identity), serial sequences,
+  // foreign keys within the schema, RLS and policies, and optionally the rows.
+  // Views, functions, triggers and custom types are NOT copied (reported back).
+
+  async appSchemaOrThrow(schema) {
+    if (!/^[a-z][a-z0-9_]{1,30}$/.test(schema || '') || SYSTEM_SCHEMAS.has(schema) || schema === 'public') {
+      throw sqlError(`"${schema}" is not an app schema`);
+    }
+    const r = await this.q(`select 1 from pg_namespace where nspname = $1`, [schema]);
+    if (!r.length) throw sqlError(`No schema ${schema}`);
+  }
+
+  async branch(source, { withData = false, reset = false } = {}) {
+    await this.appSchemaOrThrow(source);
+    if (source.endsWith('_dev')) throw sqlError('Branch the original app schema, not a branch');
+    const dev = `${source}_dev`;
+    if (dev.length > 31) throw sqlError('Schema name too long to branch (max 27 characters)');
+    const exists = (await this.q(`select 1 from pg_namespace where nspname = $1`, [dev])).length > 0;
+    if (exists && !reset) throw sqlError(`${dev} already exists: reset or delete it`);
+    if (!exists && reset) throw sqlError(`${dev} does not exist`);
+    if (withData) {
+      const [{ size }] = await this.q(`select coalesce(sum(pg_total_relation_size(c.oid)), 0)::bigint as size
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relkind in ('r','p')`, [source]);
+      if (Number(size) > 500 * 1024 * 1024) throw sqlError('Source is larger than 500 MB: branch without data');
+    }
+    const report = await this.tx(client => this.copySchema(client, source, dev, { withData, dropFirst: reset }));
+    if (!exists) await this.expose('add', dev);
+    return { branch: dev, ...report };
+  }
+
+  async deleteBranch(dev) {
+    if (!/^[a-z][a-z0-9_]{1,26}_dev$/.test(dev || '')) throw sqlError('Only branches (schemas ending in _dev) can be deleted here');
+    await this.appSchemaOrThrow(dev);
+    await this.tx(c => c.query(`drop schema ${escapeIdentifier(dev)} cascade`));
+    await this.expose('remove', dev);
+    return { deleted: dev };
+  }
+
+  expose(cmd, schema) {
+    const script = this.cfg.exposeSchemaScript || path.join(__dirname, '..', '..', 'supabase', 'expose-schema.sh');
+    return new Promise((resolve, reject) => {
+      execFile(script, [cmd, schema], { timeout: 120000, env: { ...process.env, PROJECT_DIR: this.cfg.supabaseDir } },
+        (err, stdout, stderr) => err ? reject(new Error(`API exposure (${cmd}) failed: ${(stderr || err.message).trim().split('\n').pop()}`))
+          : resolve(stdout.trim()));
+    });
+  }
+
+  async copySchema(client, src, dst, { withData, dropFirst }) {
+    const S = escapeIdentifier(src), D = escapeIdentifier(dst);
+    const q = (sql, p) => client.query(sql, p).then(r => r.rows);
+    await client.query(`set local search_path = ''`);   // catalog functions then print fully qualified names
+    if (dropFirst) await client.query(`drop schema ${D} cascade`);
+    await client.query(`create schema ${D}`);
+    for (const role of ['postgres', 'supabase_admin']) {
+      const exists = (await q(`select 1 from pg_roles where rolname = $1`, [role])).length;
+      if (!exists) continue;
+      for (const kind of ['tables', 'routines', 'sequences']) {
+        await client.query(`alter default privileges for role ${role} in schema ${D} grant all on ${kind} to anon, authenticated, service_role`).catch(() => {});
+      }
+    }
+    const tables = await q(`
+      select c.oid, c.relname as name, c.relrowsecurity as rls, c.relforcerowsecurity as force_rls
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = $1 and c.relkind in ('r','p') and not c.relispartition order by c.relname`, [src]);
+    const reSrc = new RegExp(`(^|[^\\w."])${src.replace(/[^a-z0-9_]/g, '')}\\.`, 'g');
+    const swap = sql => sql == null ? sql : sql.replace(reSrc, `$1${dst}.`);
+
+    for (const t of tables) {
+      const T = escapeIdentifier(t.name);
+      await client.query(`create table ${D}.${T} (like ${S}.${T} including all)`);
+      // serial columns still point at the source's sequences: give the copy its own
+      for (const s of await q(`
+        select a.attname as col, pg_get_serial_sequence($1, a.attname) as seq
+        from pg_attribute a where a.attrelid = $2 and a.attnum > 0 and not a.attisdropped and a.attidentity = ''`,
+      [`${S}.${T}`, t.oid])) {
+        if (!s.seq) continue;
+        const seqName = escapeIdentifier(s.seq.split('.').pop().replace(/"/g, ''));
+        const C = escapeIdentifier(s.col);
+        await client.query(`create sequence ${D}.${seqName} owned by ${D}.${T}.${C}`);
+        await client.query(`alter table ${D}.${T} alter column ${C} set default nextval('${D}.${seqName}'::regclass)`);
+      }
+    }
+    let rows = 0;
+    if (withData) {
+      for (const t of tables) {
+        const T = escapeIdentifier(t.name);
+        const cols = (await q(`select attname from pg_attribute where attrelid = $1 and attnum > 0
+          and not attisdropped and attgenerated = '' order by attnum`, [t.oid])).map(c => escapeIdentifier(c.attname)).join(', ');
+        rows += (await client.query(`insert into ${D}.${T} (${cols}) overriding system value select ${cols} from ${S}.${T}`)).rowCount;
+      }
+      for (const s of await q(`
+        select c.relname as seq, t.relname as tbl, a.attname as col
+        from pg_class c join pg_depend d on d.objid = c.oid and d.deptype = 'a'
+        join pg_class t on t.oid = d.refobjid join pg_attribute a on a.attrelid = t.oid and a.attnum = d.refobjsubid
+        join pg_namespace n on n.oid = c.relnamespace where c.relkind = 'S' and n.nspname = $1`, [dst])) {
+        await client.query(`select setval('${D}.${escapeIdentifier(s.seq)}', coalesce((select max(${escapeIdentifier(s.col)}) from ${D}.${escapeIdentifier(s.tbl)}), 0) + 1, false)`);
+      }
+      for (const t of tables) {   // identity columns
+        for (const a of await q(`select attname from pg_attribute where attrelid = $1 and attidentity <> ''`, [t.oid])) {
+          const T = escapeIdentifier(t.name), C = escapeIdentifier(a.attname);
+          await client.query(`select setval(pg_get_serial_sequence('${D}.${T}', '${a.attname.replace(/'/g, "''")}'), coalesce((select max(${C}) from ${D}.${T}), 0) + 1, false)`);
+        }
+      }
+    }
+    for (const fk of await q(`
+      select k.conname, c.relname as tbl, pg_get_constraintdef(k.oid) as def
+      from pg_constraint k join pg_class c on c.oid = k.conrelid join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = $1 and k.contype = 'f' order by k.conname`, [src])) {
+      await client.query(`alter table ${D}.${escapeIdentifier(fk.tbl)} add constraint ${escapeIdentifier(fk.conname)} ${swap(fk.def)}`);
+    }
+    let policies = 0;
+    for (const t of tables) {
+      const T = escapeIdentifier(t.name);
+      if (t.rls) await client.query(`alter table ${D}.${T} enable row level security`);
+      if (t.force_rls) await client.query(`alter table ${D}.${T} force row level security`);
+      for (const p of await q(`
+        select polname, polcmd, polpermissive,
+               case when polroles = '{0}' then 'public' else
+                 (select string_agg(quote_ident(rolname), ', ') from pg_roles where oid = any(polroles)) end as roles,
+               pg_get_expr(polqual, polrelid) as qual, pg_get_expr(polwithcheck, polrelid) as chk
+        from pg_policy where polrelid = $1`, [t.oid])) {
+        const cmd = { r: 'select', a: 'insert', w: 'update', d: 'delete', '*': 'all' }[p.polcmd];
+        await client.query(`create policy ${escapeIdentifier(p.polname)} on ${D}.${T} as ${p.polpermissive ? 'permissive' : 'restrictive'}
+          for ${cmd} to ${p.roles}${p.qual ? ` using (${swap(p.qual)})` : ''}${p.chk ? ` with check (${swap(p.chk)})` : ''}`);
+        policies++;
+      }
+    }
+    await client.query(`grant usage on schema ${D} to anon, authenticated, service_role`);
+    for (const kind of ['tables', 'sequences', 'routines']) {
+      await client.query(`grant all on all ${kind} in schema ${D} to anon, authenticated, service_role`);
+    }
+    const [skipped] = await q(`
+      select (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relkind in ('v','m'))::int as views,
+             (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = $1)::int as functions,
+             (select count(*) from pg_trigger g join pg_class c on c.oid = g.tgrelid join pg_namespace n on n.oid = c.relnamespace
+                where n.nspname = $1 and not g.tgisinternal)::int as triggers`, [src]);
+    await client.query(`notify pgrst, 'reload schema'`);
+    return { tables: tables.length, rows, policies, notCopied: skipped };
+  }
+
+  // ---- schema diagram ---------------------------------------------------------
+
+  async diagram(schema) {
+    const tables = await this.q(`
+      select c.relname as name, c.relkind = 'v' or c.relkind = 'm' as view,
+             json_agg(json_build_object('name', a.attname, 'type', format_type(a.atttypid, a.atttypmod),
+               'pk', coalesce(a.attnum = any(i.indkey), false), 'nullable', not a.attnotnull) order by a.attnum) as columns
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+      left join pg_index i on i.indrelid = c.oid and i.indisprimary
+      where n.nspname = $1 and c.relkind in ('r','p','v','m')
+      group by c.relname, c.relkind order by c.relname`, [schema]);
+    const fks = await this.q(`
+      select c.relname as from_table, tn.nspname as to_schema, t.relname as to_table, k.conname as name,
+             (select array_agg(a.attname::text order by u.o) from unnest(k.conkey) with ordinality u(n, o)
+                join pg_attribute a on a.attrelid = k.conrelid and a.attnum = u.n) as from_cols,
+             (select array_agg(a.attname::text order by u.o) from unnest(k.confkey) with ordinality u(n, o)
+                join pg_attribute a on a.attrelid = k.confrelid and a.attnum = u.n) as to_cols
+      from pg_constraint k join pg_class c on c.oid = k.conrelid join pg_namespace n on n.oid = c.relnamespace
+      join pg_class t on t.oid = k.confrelid join pg_namespace tn on tn.oid = t.relnamespace
+      where k.contype = 'f' and n.nspname = $1 order by c.relname, k.conname`, [schema]);
+    return { schema, tables, fks };
+  }
+
+  // ---- migration history (supabase CLI) -----------------------------------------
+
+  async migrations() {
+    const ok = (await this.q(`select to_regclass('supabase_migrations.schema_migrations') is not null as ok`))[0].ok;
+    if (!ok) return [];
+    const cols = (await this.q(`select column_name from information_schema.columns
+      where table_schema = 'supabase_migrations' and table_name = 'schema_migrations'`)).map(r => r.column_name);
+    return this.q(`select version, ${cols.includes('name') ? 'name' : 'null as name'},
+        ${cols.includes('statements') ? 'coalesce(array_length(statements, 1), 0)' : '0'} as statements
+      from supabase_migrations.schema_migrations order by version desc limit 200`);
+  }
+
   // ---- table editor ------------------------------------------------------------
 
   async columnsOf(schema, table) {

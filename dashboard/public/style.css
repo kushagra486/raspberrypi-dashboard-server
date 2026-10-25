@@ -133,3 +133,11 @@ a.button.small, label.button.small { padding: 3px 9px; font-size: 13px; }
 .row-actions { white-space: nowrap; }
 .row-actions > * { margin-right: 4px; }
 pre.output { padding: 10px; background: #0d131b; border-radius: 6px; white-space: pre-wrap; max-height: 320px; overflow: auto; }
+
+/* Branches, diagram, snippets */
+button.danger { color: var(--bad); border-color: rgba(242, 95, 92, .4); }
+.diagram-wrap { background: #0d131b; border-radius: 8px; padding: 4px; max-height: 70vh; overflow: auto; }
+.diagram .tbl:hover rect:first-child { stroke: var(--accent); }
+.snippet-bar { gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.snippet-bar select { min-width: 200px; }
+details.panel > summary { cursor: pointer; }

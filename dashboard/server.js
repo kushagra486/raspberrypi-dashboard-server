@@ -11,6 +11,7 @@ const { Docker } = require('./lib/docker');
 const { Sessions } = require('./lib/sessions');
 const { Database } = require('./lib/db');
 const { Backups } = require('./lib/backups');
+const { Snippets } = require('./lib/snippets');
 
 const cfg = config.load();
 const auth = new Auth({ passwordHash: cfg.passwordHash, ttlHours: cfg.sessionTtlHours });
@@ -18,6 +19,7 @@ const docker = new Docker(cfg.dockerSocket);
 const sessions = new Sessions(cfg);
 const database = new Database(cfg, docker);
 const backups = new Backups(cfg);
+const snippets = new Snippets(path.join(cfg.dataDir, 'snippets.json'));
 
 const PUBLIC = path.join(config.ROOT, 'public');
 const VENDOR = {
@@ -94,6 +96,13 @@ async function api(req, res, url) {
   if (route === 'GET /api/system') return send(res, 200, await system.snapshot(cfg.disks));
   if (route === 'GET /api/links') return send(res, 200, cfg.links);
   if (route === 'GET /api/backups') return send(res, 200, await backups.list());
+  if (route === 'GET /api/snippets') return send(res, 200, snippets.list());
+  if (route === 'POST /api/snippets' || route === 'DELETE /api/snippets') {
+    try {
+      if (req.method === 'DELETE') return send(res, 200, snippets.remove(url.searchParams.get('name') || ''));
+      return send(res, 200, snippets.save(await readJson(req, 200 * 1024)));
+    } catch (e) { return send(res, e.status || 400, { error: e.message }); }
+  }
   if (route === 'GET /api/backups/status') return send(res, 200, await backups.status());
   if (route === 'GET /api/backups/download') {
     let file;
@@ -136,6 +145,13 @@ async function api(req, res, url) {
       }
       if (route === 'GET /api/db/users') return send(res, 200, await database.authUsers());
       if (route === 'GET /api/db/buckets') return send(res, 200, await database.buckets());
+      if (route === 'GET /api/db/diagram') return send(res, 200, await database.diagram(url.searchParams.get('schema') || ''));
+      if (route === 'GET /api/db/migrations') return send(res, 200, await database.migrations());
+      if (route === 'POST /api/db/branch') {
+        const { schema, withData, reset } = await readJson(req);
+        return send(res, 200, await database.branch(schema, { withData: !!withData, reset: !!reset }));
+      }
+      if (route === 'DELETE /api/db/branch') return send(res, 200, await database.deleteBranch(url.searchParams.get('schema') || ''));
       if (route === 'GET /api/db/connect') return send(res, 200, await database.connectInfo(url.searchParams.get('schema') || ''));
       if (route === 'POST /api/db/rows') return send(res, 200, await database.writeRow(await readJson(req, 1024 * 1024)));
       if (route === 'GET /api/db/export') {

@@ -61,11 +61,18 @@
         el('td', {}, p.tables_without_rls
           ? el('span', { class: 'tag exited', title: 'Tables without row level security are readable/writable with the public key if exposed' }, `${p.tables_without_rls} without RLS`)
           : el('span', { class: 'tag running' }, p.tables ? 'all on' : '–')),
-        el('td', {}, el('button', { class: 'ghost small', onclick: ev => { ev.stopPropagation(); openConnect(p.schema).catch(e => err(e.message)); } }, 'Connect')))));
+        el('td', { class: 'row-actions' }, ...projectActions(p)))));
       if (cur.schema) await openSchema(cur.schema, true);
     },
 
-    async sql() { $('#sql-input').focus(); },
+    async sql() {
+      $('#sql-input').focus();
+      await loadSnippets();
+      const m = await api('/api/db/migrations');
+      $('#mig-list').replaceChildren(...(m.length ? m.map(x => el('tr', {},
+        el('td', { class: 'mono' }, x.version), el('td', {}, x.name || ''), el('td', {}, String(x.statements))))
+        : [el('tr', {}, el('td', { colspan: 3, class: 'muted' }, 'No migrations recorded (only apps deployed with the Supabase CLI have them).'))]));
+    },
 
     async users() {
       const u = await api('/api/db/users');
@@ -244,6 +251,165 @@
       await openTable(cur.schema, cur.table, 0);
       $('#db-edit-msg').textContent = `Imported ${r.inserted} rows.`;
     } catch (e2) { err(e2.message); }
+  });
+
+  // ---- project actions: connect, branch, reset / delete branch
+  const stop = fn => ev => { ev.stopPropagation(); fn().catch(e => err(e.message)); };
+  function projectActions(p) {
+    const acts = [el('button', { class: 'ghost small', onclick: stop(() => openConnect(p.schema)) }, 'Connect')];
+    if (p.schema === 'public') return acts;
+    if (p.schema.endsWith('_dev')) {
+      const source = p.schema.slice(0, -4);
+      acts.push(el('button', { class: 'ghost small', title: `Throw away changes and copy ${source} again`, onclick: stop(async () => {
+        const withData = confirm(`Reset ${p.schema} from ${source}?\n\nOK = copy structure AND rows\nCancel = choose structure only`);
+        if (!withData && !confirm(`Reset ${p.schema} with structure only (empty tables)? Everything in ${p.schema} is replaced.`)) return;
+        const r = await api('/api/db/branch', { method: 'POST', body: { schema: source, withData, reset: true } });
+        err(''); alert(branchSummary(r)); await views.projects();
+      }) }, 'Reset'));
+      acts.push(el('button', { class: 'ghost small danger', onclick: stop(async () => {
+        if (prompt(`Delete branch ${p.schema} and all its data? Type its name to confirm:`) !== p.schema) return;
+        await api(`/api/db/branch?schema=${encodeURIComponent(p.schema)}`, { method: 'DELETE' });
+        if (cur.schema === p.schema) { cur.schema = null; $('#db-tables-panel').classList.add('hidden'); $('#db-table-panel').classList.add('hidden'); }
+        await views.projects();
+      }) }, 'Delete'));
+    } else {
+      acts.push(el('button', { class: 'ghost small', onclick: stop(async () => openBranch(p.schema)) }, 'Branch'));
+    }
+    return acts;
+  }
+  const branchSummary = r => {
+    const n = r.notCopied || {};
+    const skipped = [n.views && `${n.views} view(s)`, n.functions && `${n.functions} function(s)`, n.triggers && `${n.triggers} trigger(s)`].filter(Boolean);
+    return `${r.branch}: ${r.tables} tables, ${r.rows} rows, ${r.policies} policies copied.` +
+      (skipped.length ? ` Not copied: ${skipped.join(', ')}; recreate them in the SQL editor if the branch needs them.` : '');
+  };
+  function openBranch(schema) {
+    $('#db-branch-name').textContent = schema;
+    $('#db-branch-target').textContent = `${schema}_dev`;
+    $('#db-branch-msg').textContent = '';
+    $('#db-branch-panel').classList.remove('hidden');
+    $('#db-branch-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  $('#db-branch-close').addEventListener('click', () => $('#db-branch-panel').classList.add('hidden'));
+  $('#db-branch-go').addEventListener('click', async () => {
+    const schema = $('#db-branch-name').textContent;
+    $('#db-branch-go').disabled = true; $('#db-branch-msg').textContent = 'copying… (the REST API restarts for a few seconds)';
+    try {
+      const r = await api('/api/db/branch', { method: 'POST', body: { schema, withData: $('#db-branch-data').checked } });
+      $('#db-branch-msg').textContent = branchSummary(r);
+      await views.projects();
+    } catch (e) { $('#db-branch-msg').textContent = ''; err(e.message); }
+    $('#db-branch-go').disabled = false;
+  });
+
+  // ---- schema diagram (SVG, laid out by foreign-key depth: referenced tables on the left)
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const svg = (tag, attrs = {}, text) => {
+    const n = document.createElementNS(SVGNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    if (text != null) n.textContent = text;
+    return n;
+  };
+  async function openDiagram(schema) {
+    const d = await api(`/api/db/diagram?schema=${encodeURIComponent(schema)}`);
+    $('#db-diagram-name').textContent = schema;
+    const W = 230, HEAD = 26, ROW = 19, MAXC = 14, GX = 90, GY = 28, PAD = 16;
+    const local = d.fks.filter(f => f.to_schema === schema && f.to_table !== f.from_table);
+    const depth = {};
+    const level = (t, seen = new Set()) => {
+      if (depth[t] != null) return depth[t];
+      if (seen.has(t)) return 0;
+      seen.add(t);
+      const parents = local.filter(f => f.from_table === t).map(f => f.to_table);
+      return (depth[t] = parents.length ? 1 + Math.max(...parents.map(p => level(p, seen))) : 0);
+    };
+    d.tables.forEach(t => level(t.name));
+    const cols = {};
+    d.tables.forEach(t => (cols[depth[t.name]] = cols[depth[t.name]] || []).push(t));
+    const pos = {}, rowY = {};
+    let width = 0, height = 0;
+    Object.keys(cols).sort((a, b) => a - b).forEach((lv, ci) => {
+      let y = PAD;
+      cols[lv].forEach(t => {
+        const shown = t.columns.slice(0, MAXC), h = HEAD + ROW * (shown.length + (t.columns.length > MAXC ? 1 : 0)) + 6;
+        const x = PAD + ci * (W + GX);
+        pos[t.name] = { x, y, h };
+        shown.forEach((c, i) => { rowY[`${t.name}.${c.name}`] = y + HEAD + ROW * i + ROW / 2 + 2; });
+        y += h + GY; width = Math.max(width, x + W + PAD); height = Math.max(height, y);
+      });
+    });
+    const root = svg('svg', { xmlns: SVGNS, width, height, viewBox: `0 0 ${width} ${height}`, class: 'diagram' });
+    root.append(svg('style', {}, `text{font:12px ui-monospace,Menlo,Consolas,monospace;fill:#c9d4e0}.h{font-weight:700;fill:#e6edf3}.t{fill:#8b9bb0}.pk{fill:#3ecf8e}.fk{fill:#f0b429}`));
+    const defs = svg('defs');
+    defs.append(Object.assign(svg('marker', { id: 'arrow', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' }),
+      {}));
+    defs.firstChild.append(svg('path', { d: 'M0,0 L10,5 L0,10 z', fill: '#4a6a8a' }));
+    root.append(defs);
+    const edges = svg('g', { fill: 'none', stroke: '#4a6a8a', 'stroke-width': 1.4 });
+    root.append(edges);
+    local.forEach(f => {
+      const a = pos[f.from_table], b = pos[f.to_table];
+      if (!a || !b) return;
+      const y1 = rowY[`${f.from_table}.${f.from_cols[0]}`] ?? a.y + HEAD / 2, y2 = rowY[`${f.to_table}.${f.to_cols[0]}`] ?? b.y + HEAD / 2;
+      const x1 = a.x, x2 = b.x + W;
+      const mid = Math.max(30, (x1 - x2) / 2);
+      edges.append(svg('path', { d: `M${x1},${y1} C${x1 - mid},${y1} ${x2 + mid},${y2} ${x2},${y2}`, 'marker-end': 'url(#arrow)' }));
+    });
+    const fkCols = new Set(d.fks.flatMap(f => f.from_cols.map(c => `${f.from_table}.${c}`)));
+    const external = {};
+    d.fks.filter(f => f.to_schema !== schema).forEach(f => { external[`${f.from_table}.${f.from_cols[0]}`] = `→ ${f.to_schema}.${f.to_table}`; });
+    d.tables.forEach(t => {
+      const { x, y, h } = pos[t.name];
+      const g = svg('g', { class: 'tbl', 'data-table': t.name, style: 'cursor:pointer' });
+      g.append(svg('rect', { x, y, width: W, height: h, rx: 8, fill: '#121821', stroke: t.view ? '#4a6a8a' : '#2b3a4f', 'stroke-dasharray': t.view ? '4 3' : '' }));
+      g.append(svg('rect', { x, y, width: W, height: HEAD, rx: 8, fill: '#1a2533' }));
+      g.append(svg('text', { x: x + 10, y: y + 17, class: 'h' }, (t.view ? '👁 ' : '') + t.name));
+      t.columns.slice(0, MAXC).forEach((c, i) => {
+        const cy = y + HEAD + ROW * i + 14, key = `${t.name}.${c.name}`;
+        const cls = c.pk ? 'pk' : fkCols.has(key) ? 'fk' : '';
+        g.append(svg('text', { x: x + 10, y: cy, class: cls }, (c.pk ? '🔑 ' : fkCols.has(key) ? '↗ ' : '') + c.name));
+        const typ = external[key] || c.type;
+        g.append(svg('text', { x: x + W - 10, y: cy, 'text-anchor': 'end', class: 't' }, typ.length > 18 ? typ.slice(0, 17) + '…' : typ));
+      });
+      if (t.columns.length > MAXC) g.append(svg('text', { x: x + 10, y: y + HEAD + ROW * MAXC + 14, class: 't' }, `+ ${t.columns.length - MAXC} more`));
+      if (!t.view) g.addEventListener('click', () => openTable(schema, t.name, 0).catch(e => err(e.message)));
+      root.append(g);
+    });
+    $('#db-diagram').replaceChildren(d.tables.length ? root : el('p', { class: 'muted' }, 'No tables yet.'));
+    $('#db-diagram-panel').classList.remove('hidden');
+    $('#db-diagram-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  $('#db-diagram-open').addEventListener('click', () => openDiagram(cur.schema).catch(e => err(e.message)));
+  $('#db-diagram-close').addEventListener('click', () => $('#db-diagram-panel').classList.add('hidden'));
+  $('#db-diagram-svg').addEventListener('click', () => {
+    const node = $('#db-diagram svg'); if (!node) return;
+    const a = el('a', { href: URL.createObjectURL(new Blob([node.outerHTML], { type: 'image/svg+xml' })), download: `${$('#db-diagram-name').textContent}-diagram.svg` });
+    document.body.append(a); a.click(); a.remove();
+  });
+
+  // ---- saved snippets (stored on the Pi)
+  let snippetList = [];
+  async function loadSnippets(select) {
+    snippetList = await api('/api/snippets');
+    $('#snip-list').replaceChildren(el('option', { value: '' }, snippetList.length ? 'Saved snippets…' : 'No saved snippets yet'),
+      ...snippetList.map(x => el('option', { value: x.name }, x.name)));
+    if (select) $('#snip-list').value = select;
+  }
+  $('#snip-list').addEventListener('change', () => {
+    const s = snippetList.find(x => x.name === $('#snip-list').value);
+    if (s) { $('#sql-input').value = s.sql; $('#sql-input').focus(); }
+  });
+  $('#snip-save').addEventListener('click', async () => {
+    const name = prompt('Save this query as:', $('#snip-list').value || '');
+    if (!name) return;
+    try { await api('/api/snippets', { method: 'POST', body: { name, sql: $('#sql-input').value } }); await loadSnippets(name.trim()); }
+    catch (e) { err(e.message); }
+  });
+  $('#snip-delete').addEventListener('click', async () => {
+    const name = $('#snip-list').value;
+    if (!name || !confirm(`Delete the saved snippet "${name}"?`)) return;
+    try { await api(`/api/snippets?name=${encodeURIComponent(name)}`, { method: 'DELETE' }); await loadSnippets(); }
+    catch (e) { err(e.message); }
   });
 
   // ---- connect an app
