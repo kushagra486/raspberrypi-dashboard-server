@@ -20,7 +20,7 @@ always-on database. Infra repo: `github.com/kushagra486/raspberrypi-dashboard-se
 | **Pi Console app** (private) | `https://raspberrypi.tailc40262.ts.net:9443` (installable app, Tailscale Serve) or `http://raspberrypi:7070`: stats, **Database** (projects, tables + editor, RLS gaps, Advisors, query insights, Connect-to-Vercel, `_dev` branches, diagram, SQL editor with saved snippets, auth users, storage), Claude/shell sessions in tmux, Docker, backups |
 | Supabase files | `~/supabase-project` (self-hosted v0.8.3, Postgres 17, **Kong** gateway) |
 | Backups | nightly 03:30 → `/mnt/data/backups` (pendrive), `pg_dump -Fc` + `.env` |
-| Apps | one Supabase instance, **one Postgres schema per app** |
+| Apps | shared: one Postgres schema per app in the main database. **Isolated** (own database, own users, own keys): `supabase/isolated/iso-project.sh create NAME`, served at `https://raspberrypi.tailc40262.ts.net/p/NAME` (see `supabase/isolated/README.md`) |
 
 Private addresses work only on devices in his tailnet. No domain, no Cloudflare: his
 decision. Do not suggest buying a domain.

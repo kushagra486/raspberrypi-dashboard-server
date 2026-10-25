@@ -8,6 +8,7 @@
 # Manual: pi-health.sh --print   (show checks, send nothing)
 set -uo pipefail
 CONF="${PI_HEALTH_CONF:-$HOME/.config/pi-health.env}"
+# shellcheck disable=SC1090  # owner-written config file
 [ -f "$CONF" ] && . "$CONF"
 STATE="$HOME/.cache/pi-health.state"; mkdir -p "$(dirname "$STATE")"
 BACKUP_DIR="${BACKUP_DIR:-/mnt/data/backups}"
@@ -34,7 +35,7 @@ fi
 # containers
 while IFS=$'\t' read -r name status; do
   case "$status" in Up*unhealthy*|Restarting*|Exited*|Dead*|Created*) add "container $name: $status";; esac
-done < <(docker ps -a --filter name=supabase --filter name=realtime --format '{{.Names}}\t{{.Status}}' 2>/dev/null)
+done < <(docker ps -a --filter name=supabase --filter name=realtime --filter name=iso- --format '{{.Names}}\t{{.Status}}' 2>/dev/null)
 docker info >/dev/null 2>&1 || add "Docker is not responding"
 # services
 for s in pi-console docker tailscaled; do

@@ -13,6 +13,8 @@ end $$;
 
 drop schema if exists auth, storage, janseva, shop, lab, blog, blog_dev, acme_store, pi_console, extensions cascade;
 drop table if exists public.notes;
+drop database if exists proj_isoa;
+drop database if exists proj_isob;
 
 create schema extensions;
 create extension if not exists pg_stat_statements with schema extensions;

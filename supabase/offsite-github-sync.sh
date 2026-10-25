@@ -22,6 +22,16 @@ git config user.name "pi-backup"; git config user.email "pi-backup@$(hostname).l
 for f in "${dumps[@]}" ${newest_env:+"$newest_env"}; do
   age -r "$RECIPIENT" -o "$(basename "$f").age" "$f"
 done
+# isolated projects: same treatment, one folder each
+for dir in "$BACKUP_DIR"/*/; do
+  [ -d "$dir" ] || continue
+  name="$(basename "$dir")"
+  mapfile -t pd < <(ls -1t "$dir"db-*.dump 2>/dev/null | head -n "$KEEP")
+  [ ${#pd[@]} -gt 0 ] || continue
+  mkdir -p "$name"
+  penv="$(ls -1t "$dir"env-* 2>/dev/null | head -1 || true)"
+  for f in "${pd[@]}" ${penv:+"$penv"}; do age -r "$RECIPIENT" -o "$name/$(basename "$f").age" "$f"; done
+done
 cat > README.md <<'EOF'
 # Pi database backups (encrypted)
 

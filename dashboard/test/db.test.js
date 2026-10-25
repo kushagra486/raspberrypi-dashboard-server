@@ -24,15 +24,40 @@ before(async () => {
   fs.writeFileSync(path.join(tmp, 'expose.sh'), `#!/bin/sh\necho "$1 $2" >> ${path.join(tmp, 'expose.log')}\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(tmp, 'new-project.sh'),
     '#!/bin/sh\nPGPASSWORD=test-db-pass psql -q -h 127.0.0.1 -U supabase_admin -d postgres -c "create schema if not exists $1" && echo "created $1"\n', { mode: 0o755 });
+  // stand-in for supabase/isolated/iso-project.sh: a real separate database with its own auth.users
+  fs.writeFileSync(path.join(tmp, 'iso.sh'), `#!/bin/sh
+set -e
+# PGPASSWORD comes from the test server's environment
+P="psql -q -h 127.0.0.1 -U supabase_admin"
+case "$1" in
+  create)
+    $P -d postgres -c "create database proj_$2"
+    $P -d proj_$2 -c "create schema auth;
+      create table auth.users (id uuid primary key default gen_random_uuid(), email text, phone text,
+        created_at timestamptz default now(), last_sign_in_at timestamptz, email_confirmed_at timestamptz, encrypted_password text);
+      insert into auth.users (email, encrypted_password) values ('$2@iso.example', 'HASH');
+      create table public.items (id int primary key, owner text);
+      insert into public.items values (1, '$2');"
+    mkdir -p "$ISO_DIR/projects/$2"
+    printf 'NAME=%s\\nDATABASE=proj_%s\\nANON_KEY=anon-%s\\nSERVICE_KEY=secret-service-%s\\nCREATED=now\\n' $2 $2 $2 $2 > "$ISO_DIR/projects/$2/project.env"
+    echo "created isolated project $2"; echo "service key: secret-service-$2" ;;
+  remove)
+    [ "$3" = --drop-data ] || exit 1
+    $P -d postgres -c "drop database proj_$2"
+    rm -rf "$ISO_DIR/projects/$2"
+    echo "removed isolated project $2 (final backup kept at /backups/$2/final.dump)" ;;
+esac
+`, { mode: 0o755 });
   fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({
     bind: '127.0.0.1', port, projectRoots: [tmp], supabaseDir: tmp, disks: ['/'],
     dockerSocket: path.join(tmp, 'none.sock'), db: { host: '127.0.0.1', port: 5432 },
     exposeSchemaScript: path.join(tmp, 'expose.sh'), dataDir: path.join(tmp, 'data'),
     newProjectScript: path.join(tmp, 'new-project.sh'),
+    isoDir: path.join(tmp, 'iso'), isoScript: path.join(tmp, 'iso.sh'),
   }));
   proc = spawn(process.execPath, ['server.js'], {
     cwd: path.join(__dirname, '..'),
-    env: { ...process.env, PI_CONSOLE_CONFIG: path.join(tmp, 'config.json'), PI_CONSOLE_PASSWORD_HASH: hashPassword(PASSWORD) },
+    env: { ...process.env, PI_CONSOLE_CONFIG: path.join(tmp, 'config.json'), PI_CONSOLE_PASSWORD_HASH: hashPassword(PASSWORD), PGPASSWORD: 'test-db-pass' },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   await new Promise((res, rej) => { proc.stdout.on('data', d => /Pi Console on/.test(d) && res()); proc.on('exit', c => rej(new Error(`exit ${c}`))); });
@@ -311,4 +336,52 @@ test('organizations: default org holds existing projects; create, move, rename, 
   assert.strictEqual((await json(`/api/db/orgs?id=${a.id}`, { method: 'DELETE' })).status, 200);
   assert.strictEqual((await orgs()).length, 1);
   await json('/api/db/sql', { method: 'POST', body: JSON.stringify({ sql: 'drop schema acme_store; delete from pi_console.projects', readOnly: false }) });
+});
+
+test('isolated projects: create, list in org, scoped screens, connect, delete', { skip: !enabled }, async () => {
+  const orgs = (await json('/api/db/orgs')).body;
+  const personal = orgs.find(o => o.is_default);
+  for (const n of ['isoa', 'isob']) {
+    const r = await json('/api/db/isolated', { method: 'POST', body: JSON.stringify({ name: n, orgId: personal.id }) });
+    assert.strictEqual(r.status, 201, JSON.stringify(r.body));
+    assert.ok(!JSON.stringify(r.body).includes('secret-service'));        // keys never reach the browser
+  }
+  assert.strictEqual((await json('/api/db/isolated', { method: 'POST', body: JSON.stringify({ name: 'isoa' }) })).status, 400);
+  const listed = (await json('/api/db/orgs')).body.find(o => o.is_default).projects.filter(p => p.kind === 'isolated');
+  assert.deepStrictEqual(listed.map(p => [p.name, p.users, p.tables]), [['isoa', 1, 1], ['isob', 1, 1]]);
+  // every screen scoped with ?db= sees only that project's database
+  const ua = (await json('/api/db/users?db=proj_isoa')).body;
+  assert.deepStrictEqual(ua.map(u => u.email), ['isoa@iso.example']);
+  const ub = (await json('/api/db/users?db=proj_isob')).body;
+  assert.deepStrictEqual(ub.map(u => u.email), ['isob@iso.example']);
+  assert.ok(!(await json('/api/db/users')).body.some(u => /iso\.example/.test(u.email)));   // main pool unaffected
+  const rows = (await json('/api/db/table?db=proj_isoa&schema=public&name=items')).body.rows;
+  assert.deepStrictEqual(rows, [{ id: 1, owner: 'isoa' }]);
+  const sel = await json('/api/db/sql?db=proj_isob', { method: 'POST', body: JSON.stringify({ sql: 'select owner from public.items' }) });
+  assert.deepStrictEqual(sel.body.rows, [['isob']]);
+  const cross = await json('/api/db/sql?db=proj_isoa', { method: 'POST', body: JSON.stringify({ sql: 'select * from janseva.complaints limit 1' }) });
+  assert.strictEqual(cross.status, 400);                                 // main data invisible from a project
+  assert.strictEqual((await json('/api/db/tables?db=proj_nope&schema=public')).status, 400);
+  assert.strictEqual((await json('/api/db/tables?db=postgres&schema=public')).status, 400);
+  assert.strictEqual((await json('/api/db/branch?db=proj_isoa', { method: 'POST', body: JSON.stringify({ schema: 'public' }) })).status, 400);
+  const adv = (await json('/api/db/advisors?db=proj_isoa')).body;
+  assert.ok(adv.some(a => a.name === 'rls_disabled_in_exposed_schema' && a.object === 'public.items'));
+  // connect: own URL + own public key, never the service key
+  const c = (await json('/api/db/connect?schema=iso:isoa')).body;
+  assert.match(c.env, /NEXT_PUBLIC_SUPABASE_URL=https:\/\/pi\.example\/p\/isoa/);
+  assert.match(c.env, /NEXT_PUBLIC_SUPABASE_ANON_KEY=anon-isoa/);
+  assert.ok(!JSON.stringify(c).includes('secret-service'));
+  assert.strictEqual(c.tablesWithoutRls, 1);
+  // moving between orgs works for isolated projects too
+  const org = (await json('/api/db/orgs', { method: 'POST', body: JSON.stringify({ name: 'Iso Org' }) })).body;
+  await json('/api/db/projects/move', { method: 'POST', body: JSON.stringify({ schema: 'iso:isob', orgId: org.id }) });
+  assert.ok((await json('/api/db/orgs')).body.find(o => o.name === 'Iso Org').projects.some(p => p.name === 'isob'));
+  // delete
+  for (const n of ['isoa', 'isob']) {
+    const d = await json(`/api/db/isolated?name=${n}`, { method: 'DELETE' });
+    assert.strictEqual(d.status, 200); assert.strictEqual(d.body.finalBackup, `/backups/${n}/final.dump`);
+  }
+  assert.strictEqual((await json('/api/db/isolated?name=isoa', { method: 'DELETE' })).status, 400);
+  assert.strictEqual((await json('/api/db/users?db=proj_isoa')).status, 400);
+  await json(`/api/db/orgs?id=${org.id}`, { method: 'DELETE' });
 });

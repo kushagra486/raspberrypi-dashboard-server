@@ -17,7 +17,7 @@ const cfg = config.load();
 const auth = new Auth({ passwordHash: cfg.passwordHash, ttlHours: cfg.sessionTtlHours });
 const docker = new Docker(cfg.dockerSocket);
 const sessions = new Sessions(cfg);
-const database = new Database(cfg, docker);
+const rootDatabase = new Database(cfg, docker);
 const backups = new Backups(cfg);
 const snippets = new Snippets(path.join(cfg.dataDir, 'snippets.json'));
 
@@ -135,6 +135,14 @@ async function api(req, res, url) {
   // ---- database section
   if (url.pathname.startsWith('/api/db/')) {
     try {
+      // ?db=proj_<name> scopes every database screen to one isolated project's own database
+      const dbParam = url.searchParams.get('db');
+      const database = dbParam ? rootDatabase.forDb(dbParam) : rootDatabase;
+      if (route === 'POST /api/db/isolated') {
+        const { name, orgId } = await readJson(req);
+        return send(res, 201, await rootDatabase.createIsolated(name, orgId ?? null));
+      }
+      if (route === 'DELETE /api/db/isolated') return send(res, 200, await rootDatabase.deleteIsolated(url.searchParams.get('name') || ''));
       if (route === 'GET /api/db/overview') return send(res, 200, { ...(await database.overview()), studioUrl: cfg.studioUrl });
       if (route === 'GET /api/db/projects') return send(res, 200, await database.projects());
       if (route === 'GET /api/db/tables') return send(res, 200, await database.tables(url.searchParams.get('schema') || ''));
@@ -145,11 +153,11 @@ async function api(req, res, url) {
       }
       if (route === 'GET /api/db/users') return send(res, 200, await database.authUsers());
       if (route === 'GET /api/db/buckets') return send(res, 200, await database.buckets());
-      if (route === 'GET /api/db/orgs') return send(res, 200, await database.orgs());
-      if (route === 'POST /api/db/orgs') return send(res, 201, await database.createOrg((await readJson(req)).name));
-      if (route === 'PATCH /api/db/orgs') { const b = await readJson(req); return send(res, 200, await database.renameOrg(b.id, b.name)); }
-      if (route === 'DELETE /api/db/orgs') return send(res, 200, await database.deleteOrg(url.searchParams.get('id')));
-      if (route === 'POST /api/db/projects/move') { const b = await readJson(req); return send(res, 200, await database.moveProject(b.schema, b.orgId)); }
+      if (route === 'GET /api/db/orgs') return send(res, 200, await rootDatabase.orgs());
+      if (route === 'POST /api/db/orgs') return send(res, 201, await rootDatabase.createOrg((await readJson(req)).name));
+      if (route === 'PATCH /api/db/orgs') { const b = await readJson(req); return send(res, 200, await rootDatabase.renameOrg(b.id, b.name)); }
+      if (route === 'DELETE /api/db/orgs') return send(res, 200, await rootDatabase.deleteOrg(url.searchParams.get('id')));
+      if (route === 'POST /api/db/projects/move') { const b = await readJson(req); return send(res, 200, await rootDatabase.moveProject(b.schema, b.orgId)); }
       if (route === 'GET /api/db/diagram') return send(res, 200, await database.diagram(url.searchParams.get('schema') || ''));
       if (route === 'GET /api/db/migrations') return send(res, 200, await database.migrations());
       if (route === 'POST /api/db/branch') {
@@ -157,7 +165,7 @@ async function api(req, res, url) {
         return send(res, 200, await database.branch(schema, { withData: !!withData, reset: !!reset }));
       }
       if (route === 'DELETE /api/db/branch') return send(res, 200, await database.deleteBranch(url.searchParams.get('schema') || ''));
-      if (route === 'GET /api/db/connect') return send(res, 200, await database.connectInfo(url.searchParams.get('schema') || ''));
+      if (route === 'GET /api/db/connect') return send(res, 200, await rootDatabase.connectInfo(url.searchParams.get('schema') || ''));
       if (route === 'POST /api/db/rows') return send(res, 200, await database.writeRow(await readJson(req, 1024 * 1024)));
       if (route === 'GET /api/db/export') {
         const schema = url.searchParams.get('schema') || '', name = url.searchParams.get('name') || '';
@@ -182,7 +190,7 @@ async function api(req, res, url) {
       }
       if (route === 'POST /api/db/projects') {
         const { name, orgId } = await readJson(req);
-        return send(res, 201, await database.createProject(name, orgId ?? null));
+        return send(res, 201, await rootDatabase.createProject(name, orgId ?? null));
       }
     } catch (e) {
       return send(res, e.sql ? 400 : 502, { error: e.message });

@@ -2,6 +2,11 @@
 // Uses $, el, api, fmtBytes, fmtAge and loaders from app.js.
 (() => {
   let view = 'overview';
+  // which database the screens act on: '' = main (shared projects), 'proj_<name>' = an isolated project
+  let ctx = '';
+  try { ctx = localStorage.getItem('pc-db-ctx') || ''; } catch {}
+  const withDb = p => ctx ? `${p}${p.includes('?') ? '&' : '?'}db=${encodeURIComponent(ctx)}` : p;
+  const dbApi = (p, o) => api(withDb(p), o);
   let cur = { schema: null, table: null, offset: 0, limit: 100 };
   const err = m => { $('#db-error').textContent = m || ''; };
   const show = v => {
@@ -30,7 +35,7 @@
 
   const views = {
     async overview() {
-      const o = await api('/api/db/overview');
+      const o = await dbApi('/api/db/overview');
       $('#db-studio').href = o.studioUrl;
       const cards = [
         card('Postgres', (o.version.match(/PostgreSQL [\d.]+/) || [o.version])[0], o.version.split(' on ')[1] || ''),
@@ -54,6 +59,7 @@
     async projects() {
       const orgs = await api('/api/db/orgs');
       orgCache = orgs;
+      renderContext();
       $('#db-orgs').replaceChildren(...orgs.map(renderOrg));
       if (cur.schema) await openSchema(cur.schema, true);
     },
@@ -61,14 +67,14 @@
     async sql() {
       $('#sql-input').focus();
       await loadSnippets();
-      const m = await api('/api/db/migrations');
+      const m = await dbApi('/api/db/migrations');
       $('#mig-list').replaceChildren(...(m.length ? m.map(x => el('tr', {},
         el('td', { class: 'mono' }, x.version), el('td', {}, x.name || ''), el('td', {}, String(x.statements))))
         : [el('tr', {}, el('td', { colspan: 3, class: 'muted' }, 'No migrations recorded (only apps deployed with the Supabase CLI have them).'))]));
     },
 
     async users() {
-      const u = await api('/api/db/users');
+      const u = await dbApi('/api/db/users');
       $('#db-user-list').replaceChildren(...(u.length ? u.map(x => el('tr', {},
         el('td', {}, x.email || '–'), el('td', {}, x.phone || '–'),
         el('td', {}, x.confirmed ? 'yes' : 'no'),
@@ -78,12 +84,12 @@
     },
 
     async advisors() {
-      advisorData = await api('/api/db/advisors');
+      advisorData = await dbApi('/api/db/advisors');
       renderAdvisors();
     },
 
     async insights() {
-      const d = await api(`/api/db/insights?sort=${encodeURIComponent($('#ins-sort').value)}`);
+      const d = await dbApi(`/api/db/insights?sort=${encodeURIComponent($('#ins-sort').value)}`);
       if (!d.enabled) {
         $('#ins-meta').textContent = '';
         $('#ins-list').replaceChildren(el('tr', {}, el('td', { colspan: 7, class: 'muted' },
@@ -99,7 +105,7 @@
     },
 
     async storage() {
-      const b = await api('/api/db/buckets');
+      const b = await dbApi('/api/db/buckets');
       $('#db-bucket-list').replaceChildren(...(b.length ? b.map(x => el('tr', {},
         el('td', {}, el('b', {}, x.name)), el('td', {}, x.public ? 'public' : 'private'),
         el('td', {}, String(x.objects)), el('td', {}, fmtBytes(Number(x.bytes)))))
@@ -141,7 +147,7 @@
   async function openSchema(schema, keepTable) {
     cur.schema = schema;
     if (!keepTable) { cur.table = null; $('#db-table-panel').classList.add('hidden'); }
-    const t = await api(`/api/db/tables?schema=${encodeURIComponent(schema)}`);
+    const t = await dbApi(`/api/db/tables?schema=${encodeURIComponent(schema)}`);
     $('#db-schema-name').textContent = schema;
     $('#db-tables-panel').classList.remove('hidden');
     $('#db-table-list').replaceChildren(...(t.length ? t.map(x => el('tr', { class: 'clickable', onclick: () => openTable(schema, x.name, 0) },
@@ -154,7 +160,7 @@
 
   async function openTable(schema, name, offset) {
     cur = { ...cur, schema, table: name, offset };
-    const d = await api(`/api/db/table?schema=${encodeURIComponent(schema)}&name=${encodeURIComponent(name)}&limit=${cur.limit}&offset=${offset}`);
+    const d = await dbApi(`/api/db/table?schema=${encodeURIComponent(schema)}&name=${encodeURIComponent(name)}&limit=${cur.limit}&offset=${offset}`);
     $('#db-table-name').textContent = `${schema}.${name}`;
     $('#db-columns').replaceChildren(...d.columns.map(c => el('tr', {},
       el('td', {}, el('b', {}, c.name), c.primary_key ? el('span', { class: 'tag claude' }, 'PK') : ''),
@@ -169,7 +175,7 @@
     cur.columns = d.columns; cur.rows = d.rows;
     cur.pk = d.columns.filter(c => c.primary_key).map(c => c.name);
     renderRows(fields, d.rows);
-    $('#db-export').href = `/api/db/export?schema=${encodeURIComponent(schema)}&name=${encodeURIComponent(name)}`;
+    $('#db-export').href = withDb(`/api/db/export?schema=${encodeURIComponent(schema)}&name=${encodeURIComponent(name)}`);
     $('#db-row-form').classList.add('hidden');
     $('#db-edit-msg').textContent = cur.pk.length ? '' : 'No primary key: rows can be added but not edited or deleted.';
     $('#db-page').textContent = d.rows.length ? `rows ${offset + 1}–${offset + d.rows.length}` : 'no rows';
@@ -206,7 +212,7 @@
     const key = Object.fromEntries(cur.pk.map(k => [k, fieldValue(row[k])]));
     if (!confirm(`Delete the row with ${Object.entries(key).map(([k, v]) => `${k} = ${v}`).join(', ')}? This cannot be undone.`)) return;
     try {
-      await api('/api/db/rows', { method: 'POST', body: { schema: cur.schema, table: cur.table, op: 'delete', key } });
+      await dbApi('/api/db/rows', { method: 'POST', body: { schema: cur.schema, table: cur.table, op: 'delete', key } });
       await openTable(cur.schema, cur.table, cur.offset);
       $('#db-edit-msg').textContent = 'Row deleted.';
     } catch (e) { err(e.message); }
@@ -225,9 +231,9 @@
     try {
       if (row) {
         const key = Object.fromEntries(cur.pk.map(k => [k, fieldValue(row[k])]));
-        await api('/api/db/rows', { method: 'POST', body: { schema: cur.schema, table: cur.table, op: 'update', key, values } });
+        await dbApi('/api/db/rows', { method: 'POST', body: { schema: cur.schema, table: cur.table, op: 'update', key, values } });
       } else {
-        await api('/api/db/rows', { method: 'POST', body: { schema: cur.schema, table: cur.table, op: 'insert', values } });
+        await dbApi('/api/db/rows', { method: 'POST', body: { schema: cur.schema, table: cur.table, op: 'insert', values } });
       }
       await openTable(cur.schema, cur.table, cur.offset);
       $('#db-edit-msg').textContent = row ? 'Row saved.' : 'Row added.';
@@ -240,7 +246,7 @@
     const text = await file.text();
     if (!confirm(`Append the rows in ${file.name} to ${cur.schema}.${cur.table}? The first line must be column names. If any row fails, nothing is imported.`)) return;
     try {
-      const r = await api('/api/db/import', { method: 'POST', body: { schema: cur.schema, name: cur.table, csv: text } });
+      const r = await dbApi('/api/db/import', { method: 'POST', body: { schema: cur.schema, name: cur.table, csv: text } });
       await openTable(cur.schema, cur.table, 0);
       $('#db-edit-msg').textContent = `Imported ${r.inserted} rows.`;
     } catch (e2) { err(e2.message); }
@@ -249,17 +255,31 @@
   // ---- organizations
   let orgCache = [];
   function renderOrg(o) {
+    const iso = el('input', { type: 'checkbox' });
     const form = el('form', { class: 'row org-new-project' },
       el('input', { placeholder: 'new project, e.g. myshop', pattern: '[a-z][a-z0-9_]{1,30}', required: '', 'aria-label': `New project in ${o.name}` }),
+      el('label', { class: 'check small', title: 'Own database, own sign-up users, own API keys: nothing shared with other projects' },
+        iso, ' Own users & database'),
       el('button', { type: 'submit', class: 'small' }, '+ New project'));
     form.addEventListener('submit', async e => {
       e.preventDefault(); err('');
-      const name = form.querySelector('input').value;
-      if (!confirm(`Create project "${name}" in ${o.name}? It gets its own schema, exposed through the API (the REST service restarts for a few seconds).`)) return;
+      const name = form.querySelector('input[pattern]').value;
+      const isolated = iso.checked;
+      const what = isolated
+        ? `Create the isolated project "${name}" in ${o.name}? It gets its own database, its own sign-up users and its own API keys. This takes up to a minute.`
+        : `Create project "${name}" in ${o.name}? It gets its own schema in the shared database, exposed through the API (the REST service restarts for a few seconds).`;
+      if (!confirm(what)) return;
+      const btn = form.querySelector('button'); btn.disabled = true; btn.textContent = 'Creating…';
       try {
-        await api('/api/db/projects', { method: 'POST', body: { name, orgId: o.id } });
-        await views.projects(); await openSchema(name);
+        if (isolated) {
+          await api('/api/db/isolated', { method: 'POST', body: { name, orgId: o.id } });
+          await views.projects(); await useContext(`proj_${name}`); await openSchema('public');
+        } else {
+          await api('/api/db/projects', { method: 'POST', body: { name, orgId: o.id } });
+          await views.projects(); await openSchema(name);
+        }
       } catch (e2) { err(e2.message); }
+      btn.disabled = false; btn.textContent = '+ New project';
     });
     const head = el('div', { class: 'org-head' },
       el('h3', {}, o.name, ' ', o.is_default ? el('span', { class: 'tag' }, 'default') : '', ' ',
@@ -274,7 +294,7 @@
           if (!confirm(`Delete the organization "${o.name}"? Only empty organizations can be deleted; no data is touched.`)) return;
           try { await api(`/api/db/orgs?id=${o.id}`, { method: 'DELETE' }); await views.projects(); } catch (e) { err(e.message); }
         } }, 'Delete')));
-    const rows = o.projects.length ? o.projects.map(p => el('tr', { class: 'clickable', onclick: () => openSchema(p.schema) },
+    const rows = o.projects.length ? o.projects.map(p => p.kind === 'isolated' ? isolatedRow(p, o) : el('tr', { class: 'clickable', onclick: () => useContext('').then(() => openSchema(p.schema)) },
       el('td', {}, el('b', {}, p.schema), p.schema.endsWith('_dev') ? el('span', { class: 'tag' }, 'branch') : ''),
       el('td', {}, String(p.tables)),
       el('td', {}, fmtBytes(Number(p.size))),
@@ -289,6 +309,59 @@
         el('thead', {}, el('tr', {}, ...['Project', 'Tables', 'Size', 'API', 'RLS', ''].map(h => el('th', {}, h)))),
         el('tbody', { 'data-org': String(o.id) }, ...rows))));
   }
+  function isolatedRow(p, o) {
+    const open = () => useContext(p.database).then(() => openSchema('public'));
+    return el('tr', { class: 'clickable', onclick: () => open().catch(e => err(e.message)) },
+      el('td', {}, el('b', {}, p.name), ' ', el('span', { class: 'tag claude', title: 'Own database, own users, own keys' }, 'isolated')),
+      el('td', {}, p.error ? '?' : String(p.tables)),
+      el('td', {}, p.error ? '?' : fmtBytes(Number(p.size))),
+      el('td', {}, el('span', { class: 'tag running' }, p.users === 1 ? '1 user' : `${p.users ?? '?'} users`)),
+      el('td', {}, p.tables_without_rls
+        ? el('span', { class: 'tag exited' }, `${p.tables_without_rls} without RLS`)
+        : el('span', { class: 'tag running' }, p.tables ? 'all on' : '–')),
+      el('td', { class: 'row-actions' },
+        el('button', { class: 'ghost small', onclick: stop(() => openConnect(p.schema)) }, 'Connect'),
+        el('button', { class: 'ghost small danger', onclick: stop(async () => {
+          if (prompt(`Delete the isolated project ${p.name}: its database, ALL its users and data? A final backup is kept in /mnt/data/backups/${p.name}. Type its name to confirm:`) !== p.name) return;
+          const r = await api(`/api/db/isolated?name=${encodeURIComponent(p.name)}`, { method: 'DELETE' });
+          if (ctx === p.database) await useContext('');
+          alert(`Deleted ${p.name}.${r.finalBackup ? ` Final backup: ${r.finalBackup}` : ''}`);
+          await views.projects();
+        }) }, 'Delete'),
+        moveSelect(p, o)));
+  }
+
+  // ---- database context switcher
+  function renderContext() {
+    const isos = orgCache.flatMap(o => o.projects.filter(p => p.kind === 'isolated'));
+    const sel = $('#db-context');
+    sel.replaceChildren(el('option', { value: '' }, 'Main database (shared projects)'),
+      ...isos.map(p => el('option', { value: p.database }, `${p.name} (isolated)`)));
+    if (ctx && !isos.some(p => p.database === ctx)) setCtx('');
+    sel.value = ctx;
+  }
+  function setCtx(v) {
+    ctx = v;
+    try { localStorage.setItem('pc-db-ctx', v); } catch {}
+    if ($('#db-context').value !== v) $('#db-context').value = v;
+    document.body.classList.toggle('db-isolated', !!v);
+  }
+  async function useContext(v) {
+    if (v === ctx) return;
+    setCtx(v);
+    cur = { schema: null, table: null, offset: 0, limit: 100 };
+    ['#db-tables-panel', '#db-table-panel', '#db-diagram-panel', '#db-branch-panel'].forEach(x => $(x).classList.add('hidden'));
+    // never leave another database's data on screen while the new one loads
+    ['#db-cards', '#db-user-list', '#db-bucket-list', '#adv-list', '#ins-list', '#mig-list', '#sql-result'].forEach(x => $(x) && $(x).replaceChildren());
+    ['#sql-meta', '#adv-summary', '#ins-meta'].forEach(x => { if ($(x)) $(x).textContent = ''; });
+    err('');
+  }
+  $('#db-context').addEventListener('change', async () => {
+    await useContext($('#db-context').value);
+    if (view === 'projects' && ctx) await openSchema('public').catch(e => err(e.message));
+    else await show(view);
+  });
+
   function moveSelect(p, o) {
     if (p.schema === 'public' || p.schema.endsWith('_dev') || orgCache.length < 2) return '';
     const sel = el('select', { class: 'small', title: 'Move to organization', 'aria-label': `Move ${p.schema}` },
@@ -366,7 +439,7 @@
     return n;
   };
   async function openDiagram(schema) {
-    const d = await api(`/api/db/diagram?schema=${encodeURIComponent(schema)}`);
+    const d = await dbApi(`/api/db/diagram?schema=${encodeURIComponent(schema)}`);
     $('#db-diagram-name').textContent = schema;
     const W = 230, HEAD = 26, ROW = 19, MAXC = 14, GX = 90, GY = 28, PAD = 16;
     const local = d.fks.filter(f => f.to_schema === schema && f.to_table !== f.from_table);
@@ -470,7 +543,11 @@
   // ---- connect an app
   async function openConnect(schema) {
     const c = await api(`/api/db/connect?schema=${encodeURIComponent(schema)}`);
-    $('#db-connect-name').textContent = schema;
+    const isoName = c.isolated ? schema.slice(4) : null;
+    $('#db-connect-name').textContent = isoName ? `${isoName} (isolated: own users and database)` : schema;
+    $('#db-connect-redirect-cmd').textContent = isoName
+      ? `supabase/isolated/iso-project.sh site ${isoName} https://<app>.vercel.app`
+      : `supabase/auth-urls.sh add 'https://<app>.vercel.app/**'`;
     $('#db-connect-env').textContent = c.env;
     $('#db-connect-snippet').textContent = c.snippet;
     const warns = [];
@@ -498,7 +575,7 @@
     try { localStorage.setItem('pc-sql', sql); } catch {}
     $('#sql-error').textContent = ''; $('#sql-meta').textContent = 'running…';
     try {
-      const r = await api('/api/db/sql', { method: 'POST', body: { sql, readOnly } });
+      const r = await dbApi('/api/db/sql', { method: 'POST', body: { sql, readOnly } });
       $('#sql-meta').textContent = `${r.command || ''} · ${r.fields.length ? `${r.rows.length} row(s)${r.truncated ? ' (first 1000)' : ''}` : `${r.rowCount ?? 0} affected`} · ${r.ms} ms${r.readOnly ? ' · read-only, rolled back' : ' · committed'}`;
       if (r.fields.length) dataTable($('#sql-result'), r.fields, r.rows);
       else $('#sql-result').replaceChildren();
@@ -511,6 +588,10 @@
   $('#sql-run').addEventListener('click', runSql);
   sqlInput.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); runSql(); } });
 
-  loaders.database = () => show(view);
+  loaders.database = async () => {
+    if (!orgCache.length) { try { orgCache = await api('/api/db/orgs'); renderContext(); } catch {} }
+    setCtx(ctx);
+    return show(view);
+  };
   if (current === 'database') loaders.database();
 })();

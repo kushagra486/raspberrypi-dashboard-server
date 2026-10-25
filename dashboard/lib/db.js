@@ -46,11 +46,99 @@ function redactSecrets(sql) {
 }
 
 class Database {
-  constructor(cfg, docker) {
-    this.cfg = cfg;
+  constructor(cfg, docker, { database = null, parent = null } = {}) {
+    this.cfg = database ? { ...cfg, db: { ...cfg.db, database } } : cfg;
     this.docker = docker;
     this.pool = null;
     this.poolHost = null;
+    this.isolated = !!database;    // an isolated project's own database
+    this.parent = parent;
+    this.children = new Map();
+  }
+
+  // ---- isolated projects (supabase/isolated/iso-project.sh) -------------------
+  // Each has its own database proj_<name>, own Auth users and own API + keys.
+
+  isoDir() { return this.cfg.isoDir || path.join(this.cfg.supabaseDir, 'isolated'); }
+
+  isoProject(name) {
+    if (!/^[a-z][a-z0-9_]{1,30}$/.test(name || '')) return null;
+    const env = readEnv(path.join(this.isoDir(), 'projects', name, 'project.env'));
+    return env.NAME === name ? env : null;
+  }
+
+  isoNames() {
+    try {
+      return fs.readdirSync(path.join(this.isoDir(), 'projects'), { withFileTypes: true })
+        .filter(d => d.isDirectory() && this.isoProject(d.name)).map(d => d.name).sort();
+    } catch { return []; }
+  }
+
+  // Database handle for one isolated project (same features, scoped to its own database).
+  forDb(db) {
+    if (this.isolated) return this.parent.forDb(db);
+    const m = /^proj_([a-z][a-z0-9_]{1,30})$/.exec(db || '');
+    if (!m || !this.isoProject(m[1])) throw sqlError(`No isolated project database ${db}`);
+    if (!this.children.has(db)) {
+      const child = new Database(this.cfg, this.docker, { database: db, parent: this });
+      child.apiSchemas = () => ['public'];
+      this.children.set(db, child);
+    }
+    return this.children.get(db);
+  }
+
+  async isolatedProjects() {
+    const out = [];
+    for (const name of this.isoNames()) {
+      const env = this.isoProject(name);
+      const item = { kind: 'isolated', name, database: `proj_${name}`, created: env.CREATED || null };
+      try {
+        const db = this.forDb(item.database);
+        const [st] = await db.q(`
+          select pg_database_size(current_database())::text as size,
+                 (select count(*) from auth.users)::int as users,
+                 (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                    where n.nspname = 'public' and c.relkind in ('r','p'))::int as tables,
+                 (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                    where n.nspname = 'public' and c.relkind in ('r','p') and not c.relrowsecurity)::int as tables_without_rls`);
+        Object.assign(item, st);
+      } catch (e) { item.error = e.message; }
+      out.push(item);
+    }
+    return out;
+  }
+
+  runIso(args, timeout = 300000) {
+    const script = this.cfg.isoScript || path.join(__dirname, '..', '..', 'supabase', 'isolated', 'iso-project.sh');
+    return new Promise((resolve, reject) => {
+      execFile(script, args, { timeout, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, ISO_DIR: this.isoDir(), PROJECT_DIR: this.cfg.supabaseDir } },
+        (err, stdout, stderr) => {
+          if (err) return reject(new Error((stderr || stdout || err.message).trim().split('\n').filter(l => /ERROR|error/.test(l)).pop()
+            || (stderr || err.message).trim().split('\n').pop()));
+          resolve(stdout);
+        });
+    });
+  }
+
+  async createIsolated(name, orgId) {
+    if (!/^[a-z][a-z0-9_]{1,30}$/.test(name || '')) throw sqlError('Name: lowercase letters, digits, underscores; 2-31 chars; starts with a letter.');
+    if (this.isoProject(name)) throw sqlError(`Isolated project ${name} already exists`);
+    await this.runIso(['create', name]);   // output contains keys: never sent to the browser
+    if (orgId != null) await this.moveProject(`iso:${name}`, orgId);
+    return { name, kind: 'isolated' };
+  }
+
+  async deleteIsolated(name) {
+    if (!this.isoProject(name)) throw sqlError(`No isolated project ${name}`);
+    // let go of our own connections first: a database in use cannot be dropped
+    const child = this.children.get(`proj_${name}`);
+    this.children.delete(`proj_${name}`);
+    if (child && child.pool) await child.pool.end().catch(() => {});
+    const out = await this.runIso(['remove', name, '--drop-data']);
+    await this.ensureMeta();
+    await this.q(`delete from pi_console.projects where schema = $1`, [`iso:${name}`]);
+    const final = (out.match(/final backup kept at (\S+)\)/) || [])[1] || null;
+    return { deleted: name, finalBackup: final };
   }
 
   envFile() { return path.join(this.cfg.supabaseDir, '.env'); }
@@ -155,6 +243,7 @@ class Database {
   // ---- connect an app (Vercel env block) ---------------------------------------
 
   async connectInfo(schema) {
+    if (String(schema).startsWith('iso:')) return this.isoConnectInfo(schema.slice(4));
     const exists = (await this.q(`select 1 from pg_namespace where nspname = $1`, [schema])).length > 0;
     if (!exists || SYSTEM_SCHEMAS.has(schema)) throw new Error(`No app schema ${schema}`);
     const env = this.supabaseEnv();
@@ -199,6 +288,7 @@ class Database {
   }
 
   async branch(source, { withData = false, reset = false } = {}) {
+    if (this.isolated) throw sqlError('Branches are for shared projects; isolated projects are not branched yet');
     await this.appSchemaOrThrow(source);
     if (source.endsWith('_dev')) throw sqlError('Branch the original app schema, not a branch');
     const dev = `${source}_dev`;
@@ -360,6 +450,30 @@ class Database {
     return this.q(`select version, ${cols.includes('name') ? 'name' : 'null as name'},
         ${cols.includes('statements') ? 'coalesce(array_length(statements, 1), 0)' : '0'} as statements
       from supabase_migrations.schema_migrations order by version desc limit 200`);
+  }
+
+  async isoConnectInfo(name) {
+    const env = this.isoProject(name);
+    if (!env) throw sqlError(`No isolated project ${name}`);
+    const base = (this.supabaseEnv().SUPABASE_PUBLIC_URL || this.cfg.publicApiUrl || '').replace(/\/$/, '');
+    const url = `${base}/p/${name}`;
+    const [st] = await this.forDb(`proj_${name}`).q(`
+      select count(*) filter (where not c.relrowsecurity)::int as without_rls, count(*)::int as tables
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind in ('r','p')`);
+    return {
+      schema: `iso:${name}`, isolated: true, url, key: env.ANON_KEY, exposed: true,
+      tables: st.tables, tablesWithoutRls: st.without_rls,
+      siteUrl: env.SITE_URL || '', redirects: (env.REDIRECT_URLS || '').split(',').filter(Boolean),
+      env: [`NEXT_PUBLIC_SUPABASE_URL=${url}`, `NEXT_PUBLIC_SUPABASE_ANON_KEY=${env.ANON_KEY}`].join('\n'),
+      snippet: [
+        `import { createClient } from '@supabase/supabase-js'`, ``,
+        `export const supabase = createClient(`,
+        `  process.env.NEXT_PUBLIC_SUPABASE_URL,`,
+        `  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY`,
+        `)`,
+        `// own users, own database: sign-ups here never mix with other projects`,
+      ].join('\n'),
+    };
   }
 
   // ---- table editor ------------------------------------------------------------
@@ -709,7 +823,7 @@ class Database {
     const orgs = await this.q(`select id, name, is_default, created_at from pi_console.orgs order by is_default desc, name`);
     const assigned = new Map((await this.q(`select schema, org_id from pi_console.projects`)).map(r => [r.schema, r.org_id]));
     const def = orgs.find(o => o.is_default).id;
-    const projects = await this.projects();
+    const projects = [...await this.projects(), ...(await this.isolatedProjects()).map(p => ({ ...p, schema: `iso:${p.name}` }))];
     // a branch (x_dev) sits with its source project
     const orgOf = s => assigned.get(s) ?? (s.endsWith('_dev') ? assigned.get(s.slice(0, -4)) : undefined) ?? def;
     return orgs.map(o => ({ ...o, created_at: jsonSafe(o.created_at), projects: projects.filter(p => orgOf(p.schema) === o.id) }));
@@ -746,7 +860,8 @@ class Database {
 
   async moveProject(schema, orgId) {
     await this.ensureMeta();
-    await this.appSchemaOrThrow(schema);
+    if (String(schema).startsWith('iso:')) { if (!this.isoProject(schema.slice(4))) throw sqlError('No such isolated project'); }
+    else await this.appSchemaOrThrow(schema);
     if (schema.endsWith('_dev')) throw sqlError('Branches move together with their project');
     const org = (await this.q(`select id from pi_console.orgs where id = $1`, [Number(orgId)]))[0];
     if (!org) throw sqlError('No such organization');

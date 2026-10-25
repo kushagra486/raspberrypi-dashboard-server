@@ -72,6 +72,8 @@
         <button data-db="advisors">Advisors <span id="db-adv-badge" class="badge hidden"></span></button>
         <button data-db="insights">Query insights</button>
         <a id="db-studio" class="ghost-link" target="_blank" rel="noopener">Open Studio ↗</a>
+        <label class="db-context-wrap small">Database
+          <select id="db-context" aria-label="Which database the screens act on"><option value="">Main database (shared projects)</option></select></label>
       </nav>
       <p id="db-error" class="error" role="alert"></p>
 
@@ -105,7 +107,7 @@
           <div class="copy-block"><pre id="db-connect-snippet" class="mono small"></pre><button class="ghost small" data-copy="db-connect-snippet">Copy</button></div>
           <h3>3. Sign-in redirects</h3>
           <p class="muted small">If the app uses Supabase Auth, allow its URL once on the Pi:
-            <span class="mono">supabase/auth-urls.sh add 'https://&lt;app&gt;.vercel.app/**'</span></p>
+            <span class="mono" id="db-connect-redirect-cmd"></span></p>
           <p id="db-connect-redirects" class="muted small"></p>
         </div>
         <div class="panel hidden" id="db-tables-panel">

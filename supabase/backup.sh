@@ -27,4 +27,20 @@ cp "$PROJECT_DIR/.env" "$BACKUP_DIR/env-$STAMP"
 ls -1t "$BACKUP_DIR"/db-*.dump  2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm --
 ls -1t "$BACKUP_DIR"/env-*      2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm --
 
+# isolated projects (supabase/isolated): one folder each, own dump + own keys file
+ISO_DIR="${ISO_DIR:-$PROJECT_DIR/isolated}"
+for db in $(docker exec supabase-db psql -h localhost -U supabase_admin -d postgres -qAt \
+              -c "select datname from pg_database where datname like 'proj\_%' order by 1"); do
+  name="${db#proj_}"
+  mkdir -p "$BACKUP_DIR/$name"
+  TMP="$BACKUP_DIR/$name/db-$STAMP.dump.tmp"
+  docker exec supabase-db pg_dump -h localhost -U supabase_admin -d "$db" -Fc > "$TMP"
+  mv "$TMP" "$BACKUP_DIR/$name/db-$STAMP.dump"
+  [ -f "$ISO_DIR/projects/$name/project.env" ] && cp "$ISO_DIR/projects/$name/project.env" "$BACKUP_DIR/$name/env-$STAMP"
+  ls -1t "$BACKUP_DIR/$name"/db-*.dump 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm --
+  ls -1t "$BACKUP_DIR/$name"/env-*     2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm --
+  echo "backup ok: $name ($(du -h "$BACKUP_DIR/$name/db-$STAMP.dump" | cut -f1))"
+done
+TMP=""
+
 echo "backup ok: $BACKUP_DIR/db-$STAMP.dump ($(du -h "$BACKUP_DIR/db-$STAMP.dump" | cut -f1))"

@@ -150,3 +150,9 @@ details.panel > summary { cursor: pointer; }
 .org-new-project { gap: 8px; margin: 8px 0; }
 .org-new-project input { flex: 1 1 180px; }
 select.small { padding: 3px 6px; font-size: 13px; }
+
+/* Database context (main vs an isolated project) */
+.db-context-wrap { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); margin-left: auto; }
+.db-context-wrap select { max-width: 240px; }
+body.db-isolated .db-context-wrap select { border-color: var(--accent); color: var(--accent); }
+body.db-isolated #db-studio { display: none; }
