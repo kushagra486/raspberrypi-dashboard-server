@@ -60,7 +60,8 @@
         el('td', {}, p.api ? el('span', { class: 'tag running' }, 'exposed') : el('span', { class: 'tag' }, 'private')),
         el('td', {}, p.tables_without_rls
           ? el('span', { class: 'tag exited', title: 'Tables without row level security are readable/writable with the public key if exposed' }, `${p.tables_without_rls} without RLS`)
-          : el('span', { class: 'tag running' }, p.tables ? 'all on' : '–')))));
+          : el('span', { class: 'tag running' }, p.tables ? 'all on' : '–')),
+        el('td', {}, el('button', { class: 'ghost small', onclick: ev => { ev.stopPropagation(); openConnect(p.schema).catch(e => err(e.message)); } }, 'Connect')))));
       if (cur.schema) await openSchema(cur.schema, true);
     },
 
@@ -165,13 +166,102 @@
       p.with_check ? el('div', { class: 'mono small' }, `with check (${p.with_check})`) : ''))
       : [el('p', { class: 'muted' }, 'No policies. With RLS on and no policies, the public key can read nothing (safe default).')]));
     const fields = d.columns.map(c => c.name);
-    dataTable($('#db-rows'), fields, d.rows.map(r => fields.map(f => r[f])));
+    cur.columns = d.columns; cur.rows = d.rows;
+    cur.pk = d.columns.filter(c => c.primary_key).map(c => c.name);
+    renderRows(fields, d.rows);
+    $('#db-export').href = `/api/db/export?schema=${encodeURIComponent(schema)}&name=${encodeURIComponent(name)}`;
+    $('#db-row-form').classList.add('hidden');
+    $('#db-edit-msg').textContent = cur.pk.length ? '' : 'No primary key: rows can be added but not edited or deleted.';
     $('#db-page').textContent = d.rows.length ? `rows ${offset + 1}–${offset + d.rows.length}` : 'no rows';
     $('#db-prev').disabled = offset === 0;
     $('#db-next').disabled = d.rows.length < d.limit;
     $('#db-table-panel').classList.remove('hidden');
     $('#db-table-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
+
+  // ---- table editor
+  function renderRows(fields, rows) {
+    const editable = cur.pk.length > 0;
+    $('#db-rows').replaceChildren(
+      el('thead', {}, el('tr', {}, ...(editable ? [el('th', {}, '')] : []), ...fields.map(f => el('th', {}, f)))),
+      el('tbody', {}, ...(rows.length ? rows.map(r => el('tr', {},
+        ...(editable ? [el('td', { class: 'row-actions' },
+          el('button', { class: 'ghost small', title: 'Edit row', onclick: () => openRowForm(r) }, '✎'),
+          el('button', { class: 'ghost small', title: 'Delete row', onclick: () => deleteRow(r) }, '🗑'))] : []),
+        ...fields.map(f => cell(r[f]))))
+        : [el('tr', {}, el('td', { colspan: fields.length + 1, class: 'muted' }, 'No rows'))])));
+  }
+  const fieldValue = v => v === null || v === undefined ? 'NULL' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+  function openRowForm(row) {
+    cur.editing = row || null;
+    $('#db-row-form-title').textContent = row ? 'Edit row' : 'Add row';
+    $('#db-row-fields').replaceChildren(...cur.columns.map(c => el('label', { class: 'field' },
+      el('span', {}, c.name, ' ', el('span', { class: 'muted small' }, c.type + (c.primary_key ? ' · PK' : ''))),
+      Object.assign(el('input', { 'data-col': c.name, ...(c.readonly ? { disabled: '' } : {}) }),
+        { value: row ? fieldValue(row[c.name]) : '' }))));
+    $('#db-row-form').classList.remove('hidden');
+    $('#db-row-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  async function deleteRow(row) {
+    const key = Object.fromEntries(cur.pk.map(k => [k, fieldValue(row[k])]));
+    if (!confirm(`Delete the row with ${Object.entries(key).map(([k, v]) => `${k} = ${v}`).join(', ')}? This cannot be undone.`)) return;
+    try {
+      await api('/api/db/rows', { method: 'POST', body: { schema: cur.schema, table: cur.table, op: 'delete', key } });
+      await openTable(cur.schema, cur.table, cur.offset);
+      $('#db-edit-msg').textContent = 'Row deleted.';
+    } catch (e) { err(e.message); }
+  }
+  $('#db-add-row').addEventListener('click', () => openRowForm(null));
+  $('#db-row-cancel').addEventListener('click', () => $('#db-row-form').classList.add('hidden'));
+  $('#db-row-form').addEventListener('submit', async e => {
+    e.preventDefault(); err('');
+    const row = cur.editing, values = {};
+    for (const input of document.querySelectorAll('#db-row-fields input:not([disabled])')) {
+      const col = input.dataset.col, v = input.value;
+      const val = v === 'NULL' ? null : v;
+      if (row) { if (v !== fieldValue(row[col])) values[col] = val; }
+      else if (v !== '') values[col] = val;
+    }
+    try {
+      if (row) {
+        const key = Object.fromEntries(cur.pk.map(k => [k, fieldValue(row[k])]));
+        await api('/api/db/rows', { method: 'POST', body: { schema: cur.schema, table: cur.table, op: 'update', key, values } });
+      } else {
+        await api('/api/db/rows', { method: 'POST', body: { schema: cur.schema, table: cur.table, op: 'insert', values } });
+      }
+      await openTable(cur.schema, cur.table, cur.offset);
+      $('#db-edit-msg').textContent = row ? 'Row saved.' : 'Row added.';
+    } catch (e2) { err(e2.message); }
+  });
+  $('#db-import').addEventListener('change', async e => {
+    const file = e.target.files[0]; e.target.value = '';
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) return err('CSV is larger than 8 MB.');
+    const text = await file.text();
+    if (!confirm(`Append the rows in ${file.name} to ${cur.schema}.${cur.table}? The first line must be column names. If any row fails, nothing is imported.`)) return;
+    try {
+      const r = await api('/api/db/import', { method: 'POST', body: { schema: cur.schema, name: cur.table, csv: text } });
+      await openTable(cur.schema, cur.table, 0);
+      $('#db-edit-msg').textContent = `Imported ${r.inserted} rows.`;
+    } catch (e2) { err(e2.message); }
+  });
+
+  // ---- connect an app
+  async function openConnect(schema) {
+    const c = await api(`/api/db/connect?schema=${encodeURIComponent(schema)}`);
+    $('#db-connect-name').textContent = schema;
+    $('#db-connect-env').textContent = c.env;
+    $('#db-connect-snippet').textContent = c.snippet;
+    const warns = [];
+    if (!c.exposed) warns.push(`Schema "${schema}" is not exposed through the API yet: requests will fail. Create it with "Create project" (which exposes it) or add it to PGRST_DB_SCHEMAS.`);
+    if (c.tablesWithoutRls) warns.push(`${c.tablesWithoutRls} table(s) have RLS off: with this public key anyone could read and change them. See Advisors.`);
+    if (!c.url || !c.key) warns.push('Could not read the API URL or publishable key from the Supabase .env.');
+    $('#db-connect-warn').replaceChildren(...warns.map(w => el('p', { class: 'warn-box small' }, w)));
+    $('#db-connect-redirects').textContent = `Currently allowed: ${[c.siteUrl, ...c.redirects].filter(Boolean).join(', ') || 'none'}`;
+    $('#db-connect-panel').classList.remove('hidden');
+    $('#db-connect-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  $('#db-connect-close').addEventListener('click', () => $('#db-connect-panel').classList.add('hidden'));
 
   $('#db-prev').addEventListener('click', () => openTable(cur.schema, cur.table, Math.max(cur.offset - cur.limit, 0)).catch(e => err(e.message)));
   $('#db-next').addEventListener('click', () => openTable(cur.schema, cur.table, cur.offset + cur.limit).catch(e => err(e.message)));

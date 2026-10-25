@@ -198,13 +198,43 @@ loaders.apps = async () => {
 
 // ---- backups
 loaders.backups = async () => {
-  const b = await api('/api/backups');
+  const [b, st] = await Promise.all([api('/api/backups'), api('/api/backups/status').catch(() => ({}))]);
   $('#b-error').textContent = b.error || '';
+  const ago = t => t ? fmtAge(t) : 'never';
+  $('#b-status').textContent = `Off-site copy: ${ago(st.offsiteOk)} · last restore test passed: ${ago(st.restoreTestOk)}${st.busy ? ` · running: ${st.busy}` : ''}`;
+  $('#b-run').disabled = !!st.busy || st.canRun === false;
   const rows = Array.isArray(b) ? b : [];
   $('#backups').replaceChildren(...(rows.length ? rows.map(f => el('tr', {},
-    el('td', { class: 'mono' }, f.name), el('td', {}, fmtBytes(f.size)), el('td', {}, fmtAge(f.modified))))
-    : [el('tr', {}, el('td', { colspan: 3, class: 'muted' }, 'No backups found.'))]));
+    el('td', { class: 'mono' }, f.name), el('td', {}, fmtBytes(f.size)), el('td', {}, fmtAge(f.modified)),
+    el('td', { class: 'row-actions' }, ...(f.dump ? [
+      el('a', { class: 'button ghost small', href: `/api/backups/download?name=${encodeURIComponent(f.name)}`, download: f.name }, 'Download'),
+      el('button', { class: 'ghost small', onclick: () => backupJob('/api/backups/restore-test', { name: f.name },
+        `Test-restore ${f.name}? It restores into a temporary database and never touches live data.`) }, 'Test restore'),
+    ] : []))))
+    : [el('tr', {}, el('td', { colspan: 4, class: 'muted' }, 'No backups found.'))]));
 };
+async function backupJob(path, body, question) {
+  if (question && !confirm(question)) return;
+  const out = $('#b-output');
+  out.classList.remove('hidden'); out.textContent = 'running… (this can take a minute)';
+  $('#b-run').disabled = true;
+  try {
+    const r = await api(path, { method: 'POST', body });
+    out.textContent = `${r.ok ? '✔ done' : `✖ failed (exit ${r.code})`}\n\n${r.output}`;
+  } catch (e) { out.textContent = `✖ ${e.message}`; }
+  await loaders.backups().catch(() => {});
+}
+$('#b-run').addEventListener('click', () => backupJob('/api/backups/run', {}, 'Run a database backup now?'));
+
+// copy buttons (navigator.clipboard needs HTTPS; fall back to selecting the text)
+document.addEventListener('click', async e => {
+  const id = e.target.dataset && e.target.dataset.copy;
+  if (!id) return;
+  const node = document.getElementById(id);
+  try { await navigator.clipboard.writeText(node.textContent); e.target.textContent = 'Copied'; }
+  catch { const r = document.createRange(); r.selectNodeContents(node); getSelection().removeAllRanges(); getSelection().addRange(r); e.target.textContent = 'Press Ctrl+C'; }
+  setTimeout(() => { e.target.textContent = 'Copy'; }, 2000);
+});
 
 $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); location.href = '/login'; });
 

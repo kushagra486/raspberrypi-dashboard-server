@@ -42,6 +42,9 @@ function load() {
     supabaseDir: expandHome(process.env.PI_CONSOLE_SUPABASE_DIR || raw.supabaseDir || '~/supabase-project'),
     newProjectScript: expandHome(raw.newProjectScript || path.join(ROOT, '..', 'supabase', 'new-project.sh')),
     studioUrl: raw.studioUrl || 'http://raspberrypi:8000',
+    // Backups tab actions (defaults: the installed nightly script and this repo's restore test)
+    backupScript: raw.backupScript ? expandHome(raw.backupScript) : null,
+    restoreTestScript: raw.restoreTestScript ? expandHome(raw.restoreTestScript) : null,
     db: {
       host: process.env.PI_CONSOLE_DB_HOST || raw.db?.host || null,   // null = look up the container IP
       port: Number(process.env.PI_CONSOLE_DB_PORT || raw.db?.port || 5432),

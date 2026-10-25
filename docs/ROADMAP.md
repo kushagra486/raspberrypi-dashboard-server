@@ -58,10 +58,10 @@ service they change.
 |---|---|---|
 | B1 ✅ | **Advisors**: RLS off, tables without policies, missing FK indexes, unused indexes, exposed schemas | Supabase Advisors (splinter lints) |
 | B2 ✅ | **Query insights**: slowest / most frequent queries | Neon, PlanetScale Insights |
-| B3 | **Table editor**: inline edit, insert row, CSV import/export | Supabase / Airtable / PocketBase |
+| B3 ✅ | **Table editor**: inline edit, insert row, CSV import/export | Supabase / Airtable / PocketBase |
 | B4 | **Branch an app**: copy schema (+ optional data) to `app_dev`, reset, delete | Neon branching, Supabase branching |
-| B5 | **Connect to Vercel**: one click shows/copies the env block for an app (URL, publishable key, schema) | Vercel / Supabase "Connect" |
-| B6 | **Backups**: run now, download, **restore into a test schema**, off-site status | Railway / Supabase backups |
+| B5 ✅ | **Connect to Vercel**: one click shows/copies the env block for an app (URL, publishable key, schema) | Vercel / Supabase "Connect" |
+| B6 ✅ | **Backups**: run now, download, **restore into a test schema**, off-site status | Railway / Supabase backups |
 | B7 | **Schema diagram** (tables + foreign keys) | Supabase visualizer, dbdiagram |
 | B8 | **Saved SQL snippets** + migration history (`supabase_migrations`) | Supabase SQL editor, Prisma |
 | B9 | **Usage per app**: rows, size, storage per bucket, API requests (from Kong logs) | Firebase / Supabase usage |

@@ -10,12 +10,14 @@ const system = require('./lib/system');
 const { Docker } = require('./lib/docker');
 const { Sessions } = require('./lib/sessions');
 const { Database } = require('./lib/db');
+const { Backups } = require('./lib/backups');
 
 const cfg = config.load();
 const auth = new Auth({ passwordHash: cfg.passwordHash, ttlHours: cfg.sessionTtlHours });
 const docker = new Docker(cfg.dockerSocket);
 const sessions = new Sessions(cfg);
 const database = new Database(cfg, docker);
+const backups = new Backups(cfg);
 
 const PUBLIC = path.join(config.ROOT, 'public');
 const VENDOR = {
@@ -85,24 +87,29 @@ function serveFile(res, file) {
   });
 }
 
-async function listBackups() {
-  try {
-    const names = await fs.promises.readdir(cfg.backupDir);
-    const items = await Promise.all(names.filter(n => !n.startsWith('.')).map(async n => {
-      const st = await fs.promises.stat(path.join(cfg.backupDir, n));
-      return { name: n, size: st.size, modified: st.mtimeMs };
-    }));
-    return items.sort((a, b) => b.modified - a.modified);
-  } catch (e) { return { error: `${cfg.backupDir}: ${e.code || e.message}` }; }
-}
-
 async function api(req, res, url) {
   const route = `${req.method} ${url.pathname}`;
   let m;
 
   if (route === 'GET /api/system') return send(res, 200, await system.snapshot(cfg.disks));
   if (route === 'GET /api/links') return send(res, 200, cfg.links);
-  if (route === 'GET /api/backups') return send(res, 200, await listBackups());
+  if (route === 'GET /api/backups') return send(res, 200, await backups.list());
+  if (route === 'GET /api/backups/status') return send(res, 200, await backups.status());
+  if (route === 'GET /api/backups/download') {
+    let file;
+    try { file = backups.dumpPath(url.searchParams.get('name')); } catch (e) { return send(res, e.status || 400, { error: e.message }); }
+    res.writeHead(200, {
+      'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store',
+      'Content-Disposition': `attachment; filename="${path.basename(file)}"`,
+    });
+    return fs.createReadStream(file).pipe(res);
+  }
+  if (route === 'POST /api/backups/run' || route === 'POST /api/backups/restore-test') {
+    try {
+      const { name } = await readJson(req);
+      return send(res, 200, await backups.run(route.endsWith('run') ? 'backup' : 'restore-test', name));
+    } catch (e) { return send(res, e.status || 400, { error: e.message }); }
+  }
 
   if (route === 'GET /api/docker') {
     try { return send(res, 200, await docker.list()); }
@@ -129,6 +136,21 @@ async function api(req, res, url) {
       }
       if (route === 'GET /api/db/users') return send(res, 200, await database.authUsers());
       if (route === 'GET /api/db/buckets') return send(res, 200, await database.buckets());
+      if (route === 'GET /api/db/connect') return send(res, 200, await database.connectInfo(url.searchParams.get('schema') || ''));
+      if (route === 'POST /api/db/rows') return send(res, 200, await database.writeRow(await readJson(req, 1024 * 1024)));
+      if (route === 'GET /api/db/export') {
+        const schema = url.searchParams.get('schema') || '', name = url.searchParams.get('name') || '';
+        const body = await database.exportCsv(schema, name);
+        res.writeHead(200, {
+          'Content-Type': 'text/csv; charset=utf-8', 'Cache-Control': 'no-store',
+          'Content-Disposition': `attachment; filename="${`${schema}.${name}`.replace(/[^\w.-]/g, '_')}.csv"`,
+        });
+        return res.end(body);
+      }
+      if (route === 'POST /api/db/import') {
+        const { schema, name, csv } = await readJson(req, 10 * 1024 * 1024);
+        return send(res, 200, await database.importCsv(schema || '', name || '', csv || ''));
+      }
       if (route === 'GET /api/db/advisors') return send(res, 200, await database.advisors());
       if (route === 'GET /api/db/insights') {
         return send(res, 200, await database.insights({ sort: url.searchParams.get('sort') || 'total', limit: url.searchParams.get('limit') }));

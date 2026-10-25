@@ -20,7 +20,7 @@ const json = async (p, opts) => { const r = await call(p, opts); return { status
 
 before(async () => {
   if (!enabled) return;
-  fs.writeFileSync(path.join(tmp, '.env'), 'PGRST_DB_SCHEMAS=public,graphql_public,janseva,lab\nPOSTGRES_PASSWORD=test-db-pass\n');
+  fs.writeFileSync(path.join(tmp, '.env'), 'PGRST_DB_SCHEMAS=public,graphql_public,janseva,lab\nPOSTGRES_PASSWORD=test-db-pass\nSUPABASE_PUBLIC_URL=https://pi.example\nSUPABASE_PUBLISHABLE_KEY=sb_publishable_test\nSUPABASE_SECRET_KEY=sb_secret_test\n');
   fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({
     bind: '127.0.0.1', port, projectRoots: [tmp], supabaseDir: tmp, disks: ['/'],
     dockerSocket: path.join(tmp, 'none.sock'), db: { host: '127.0.0.1', port: 5432 },
@@ -150,4 +150,64 @@ test('passwords are masked in query text', () => {
   assert.strictEqual(redactSecrets('ALTER ROLE x WITH ENCRYPTED PASSWORD "abc"; select 1'), "ALTER ROLE x WITH ENCRYPTED PASSWORD '***'; select 1");
   assert.strictEqual(redactSecrets('alter user x password $$p w$$'), "alter user x password '***'");
   assert.strictEqual(redactSecrets('select encrypted_password from auth.users'), 'select encrypted_password from auth.users');
+});
+
+test('connect: env block with public key only, warnings for exposure and RLS', { skip: !enabled }, async () => {
+  const { status, body } = await json('/api/db/connect?schema=janseva');
+  assert.strictEqual(status, 200);
+  assert.strictEqual(body.exposed, true); assert.strictEqual(body.tablesWithoutRls, 0);
+  assert.match(body.env, /NEXT_PUBLIC_SUPABASE_URL=https:\/\/pi\.example/);
+  assert.match(body.env, /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_test/);
+  assert.match(body.env, /NEXT_PUBLIC_SUPABASE_SCHEMA=janseva/);
+  assert.ok(!JSON.stringify(body).includes('sb_secret_test'));
+  const shop = (await json('/api/db/connect?schema=shop')).body;
+  assert.strictEqual(shop.exposed, false); assert.strictEqual(shop.tablesWithoutRls, 1);
+  assert.strictEqual((await json('/api/db/connect?schema=auth')).status, 502);
+});
+
+test('table editor: insert, update, delete by primary key', { skip: !enabled }, async () => {
+  const post = b => json('/api/db/rows', { method: 'POST', body: JSON.stringify({ schema: 'shop', table: 'orders', ...b }) });
+  const note = `it's "quoted"`;
+  const ins = await post({ op: 'insert', values: { big: '42', raw: '\\x00ff', note } });
+  assert.strictEqual(ins.status, 200);
+  const id = ins.body.row.id;
+  assert.strictEqual(ins.body.row.raw, '\\x00ff'); assert.strictEqual(ins.body.row.note, note);
+  const up = await post({ op: 'update', key: { id: String(id) }, values: { note: null } });
+  assert.strictEqual(up.status, 200); assert.strictEqual(up.body.row.note, null);
+  const miss = await post({ op: 'update', key: { id: '999999' }, values: { note: 'x' } });
+  assert.strictEqual(miss.status, 400); assert.match(miss.body.error, /matched 0/);
+  assert.strictEqual((await post({ op: 'delete', key: { id: String(id) } })).status, 200);
+  const unknown = await post({ op: 'update', key: { id: '1' }, values: { 'note"; drop table shop.orders; --': 'x' } });
+  assert.strictEqual(unknown.status, 400); assert.match(unknown.body.error, /Unknown column/);
+  const nopk = await json('/api/db/rows', { method: 'POST', body: JSON.stringify({ schema: 'lab', table: 'nopk', op: 'delete', key: { x: '1' } }) });
+  assert.strictEqual(nopk.status, 400); assert.match(nopk.body.error, /no primary key/);
+  const typeErr = await post({ op: 'insert', values: { big: 'not a number' } });
+  assert.strictEqual(typeErr.status, 400); assert.match(typeErr.body.error, /invalid input syntax/);
+});
+
+test('CSV export and all-or-nothing import', { skip: !enabled }, async () => {
+  const exp = await call('/api/db/export?schema=shop&name=orders');
+  assert.strictEqual(exp.status, 200);
+  assert.match(exp.headers.get('content-disposition'), /shop\.orders\.csv/);
+  assert.match(await exp.text(), /^id,big,raw,note\r\n1,9007199254740993,\\xdeadbeef,first\r\n/);
+  const count = async () => Number((await json('/api/db/sql', { method: 'POST', body: JSON.stringify({ sql: 'select count(*) from shop.orders' }) })).body.rows[0][0]);
+  const before = await count();
+  const csv = 'note,big\r\n"hello, world",1\r\n"multi\nline ""q""",\r\n';
+  const imp = await json('/api/db/import', { method: 'POST', body: JSON.stringify({ schema: 'shop', name: 'orders', csv }) });
+  assert.strictEqual(imp.status, 200); assert.strictEqual(imp.body.inserted, 2);
+  const rows = (await json('/api/db/sql', { method: 'POST', body: JSON.stringify({ sql: "select note, big from shop.orders where note like 'hello%' or note like 'multi%' order by note" }) })).body.rows;
+  assert.deepStrictEqual(rows, [['hello, world', '1'], ['multi\nline "q"', null]]);
+  const bad = await json('/api/db/import', { method: 'POST', body: JSON.stringify({ schema: 'shop', name: 'orders', csv: 'note,big\nok,1\nbad,notanumber\n' }) });
+  assert.strictEqual(bad.status, 400); assert.match(bad.body.error, /Nothing was imported/);
+  const hdr = await json('/api/db/import', { method: 'POST', body: JSON.stringify({ schema: 'shop', name: 'orders', csv: 'nope\n1\n' }) });
+  assert.strictEqual(hdr.status, 400); assert.match(hdr.body.error, /Not columns/);
+  assert.strictEqual(await count(), before + 2);   // the failed import added nothing
+  await json('/api/db/sql', { method: 'POST', body: JSON.stringify({ sql: "delete from shop.orders where note like 'hello%' or note like 'multi%'", readOnly: false }) });
+});
+
+test('CSV parser handles quotes, newlines and BOM', () => {
+  const csvlib = require('../lib/csv');
+  assert.deepStrictEqual(csvlib.parse('﻿a,b\r\n"x,1","y ""z"""\n\n"multi\nline",\n'), [['a', 'b'], ['x,1', 'y "z"'], ['multi\nline', '']]);
+  assert.throws(() => csvlib.parse('a\n"open'), /unterminated/);
+  assert.strictEqual(csvlib.stringify(['a', 'b'], [[' lead', 'q"x'], [null, { k: 1 }]]), 'a,b\r\n" lead","q""x"\r\n,"{""k"":1}"\r\n');
 });

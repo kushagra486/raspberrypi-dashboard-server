@@ -27,9 +27,13 @@ before(async () => {
   fs.mkdirSync(path.join(projects, 'demo'), { recursive: true });
   fs.mkdirSync(path.join(tmp, 'backups'));
   fs.writeFileSync(path.join(tmp, 'backups', 'db-20261010-033000.dump'), 'x'.repeat(2048));
+  fs.writeFileSync(path.join(tmp, 'backups', 'env-20261010-033000'), 'SECRET=1');
+  fs.writeFileSync(path.join(tmp, 'fake-backup.sh'), '#!/bin/sh\necho "backup ok: $BACKUP_DIR"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(tmp, 'fake-restore.sh'), '#!/bin/sh\necho "restoring $1"; echo "RESTORE TEST PASSED"; touch "$BACKUP_DIR/.restore-test-ok"\n', { mode: 0o755 });
   fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({
     bind: '127.0.0.1', port, projectRoots: [projects], claudeBin: '/bin/true',
     backupDir: path.join(tmp, 'backups'), disks: ['/'], dockerSocket: path.join(tmp, 'no-docker.sock'),
+    backupScript: path.join(tmp, 'fake-backup.sh'), restoreTestScript: path.join(tmp, 'fake-restore.sh'),
     links: [{ name: 'Supabase Studio', url: 'http://pi:8000' }],
   }));
   proc = spawn(process.execPath, ['server.js'], {
@@ -144,6 +148,27 @@ test('a claude session starts in the chosen folder and falls back to a shell', a
   assert.strictEqual(fs.realpathSync(s.cwd), fs.realpathSync(dir)); // claudeBin=/bin/true exited; shell remains
   assert.strictEqual((await call('/api/sessions/e2e', { method: 'DELETE' })).status, 200);
 });
+
+test('backups: status, run now, restore test, safe downloads', async () => {
+  const st = await (await call('/api/backups/status')).json();
+  assert.strictEqual(st.canRun, true); assert.strictEqual(st.restoreTestOk, null);
+  const run = await (await call('/api/backups/run', { method: 'POST', body: '{}' })).json();
+  assert.strictEqual(run.ok, true); assert.match(run.output, /backup ok/);
+  const rt = await (await call('/api/backups/restore-test', { method: 'POST', body: JSON.stringify({ name: 'db-20261010-033000.dump' }) })).json();
+  assert.strictEqual(rt.ok, true); assert.match(rt.output, /RESTORE TEST PASSED/);
+  assert.ok((await (await call('/api/backups/status')).json()).restoreTestOk > 0);
+  const bad = await call('/api/backups/restore-test', { method: 'POST', body: JSON.stringify({ name: '../../etc/passwd' }) });
+  assert.strictEqual(bad.status, 400);
+  const dl = await call('/api/backups/download?name=db-20261010-033000.dump');
+  assert.strictEqual(dl.status, 200); assert.strictEqual((await dl.text()).length, 2048);
+  assert.match(dl.headers.get('content-disposition'), /attachment; filename="db-20261010-033000.dump"/);
+  assert.strictEqual((await call('/api/backups/download?name=env-20261010-033000')).status, 400); // secrets never served
+  assert.strictEqual((await call('/api/backups/download?name=..%2Fconfig.json')).status, 400);
+  assert.strictEqual((await call('/api/backups/download?name=db-20990101-000000.dump')).status, 404);
+  const foreign = await call('/api/backups/run', { method: 'POST', body: '{}', headers: { origin: 'https://evil.example' } });
+  assert.strictEqual(foreign.status, 403);
+});
+
 
 test('logout ends the session', async () => {
   await call('/api/logout', { method: 'POST' });

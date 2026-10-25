@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { Pool, escapeIdentifier } = require('pg');
+const csv = require('./csv');
 
 // Schemas that belong to Postgres or Supabase itself, not to an app.
 const SYSTEM_SCHEMAS = new Set([
@@ -33,6 +34,10 @@ function jsonSafe(v) {
   if (typeof v === 'bigint') return v.toString();
   return v;
 }
+
+const rowSafe = r => r && Object.fromEntries(Object.entries(r).map(([k, v]) => [k, jsonSafe(v)]));
+// Errors that are the user's input (bad SQL, bad value): reported as 400, not 502.
+function sqlError(message) { const e = new Error(message); e.sql = true; return e; }
 
 // pg_stat_statements keeps utility statements (CREATE/ALTER ROLE ... PASSWORD '...') verbatim.
 function redactSecrets(sql) {
@@ -144,6 +149,149 @@ class Database {
       from pg_class c join pg_namespace n on n.oid = c.relnamespace
       where n.nspname = $1 and c.relkind in ('r','p','v','m','f')
       order by c.relname`, [schema]);
+  }
+
+  // ---- connect an app (Vercel env block) ---------------------------------------
+
+  async connectInfo(schema) {
+    const exists = (await this.q(`select 1 from pg_namespace where nspname = $1`, [schema])).length > 0;
+    if (!exists || SYSTEM_SCHEMAS.has(schema)) throw new Error(`No app schema ${schema}`);
+    const env = this.supabaseEnv();
+    const url = env.SUPABASE_PUBLIC_URL || this.cfg.publicApiUrl || '';
+    const key = env.SUPABASE_PUBLISHABLE_KEY || env.ANON_KEY || '';   // public by design; never the secret key
+    const [rls] = await this.q(`
+      select count(*) filter (where not c.relrowsecurity)::int as without_rls, count(*)::int as tables
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = $1 and c.relkind in ('r','p')`, [schema]);
+    const exposed = this.apiSchemas().includes(schema);
+    return {
+      schema, url, key, exposed, tables: rls.tables, tablesWithoutRls: rls.without_rls,
+      siteUrl: env.SITE_URL || '', redirects: (env.ADDITIONAL_REDIRECT_URLS || '').split(',').filter(Boolean),
+      env: [
+        `NEXT_PUBLIC_SUPABASE_URL=${url}`,
+        `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=${key}`,
+        `NEXT_PUBLIC_SUPABASE_SCHEMA=${schema}`,
+      ].join('\n'),
+      snippet: [
+        `import { createClient } from '@supabase/supabase-js'`,
+        ``,
+        `export const supabase = createClient(`,
+        `  process.env.NEXT_PUBLIC_SUPABASE_URL,`,
+        `  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,`,
+        `  { db: { schema: process.env.NEXT_PUBLIC_SUPABASE_SCHEMA } }`,
+        `)`,
+      ].join('\n'),
+    };
+  }
+
+  // ---- table editor ------------------------------------------------------------
+
+  async columnsOf(schema, table) {
+    await this.assertTable(schema, table);
+    return this.q(`
+      select a.attname as name, format_type(a.atttypid, a.atttypmod) as type,
+             coalesce(a.attnum = any(i.indkey), false) as primary_key,
+             a.attidentity = 'a' or a.attgenerated <> '' as readonly
+      from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace
+      left join pg_index i on i.indrelid = c.oid and i.indisprimary
+      where n.nspname = $1 and c.relname = $2 and a.attnum > 0 and not a.attisdropped
+      order by a.attnum`, [schema, table]);
+  }
+
+  // op: insert | update | delete. key: primary key values (update/delete). values: column -> text|null.
+  async writeRow({ schema, table, op, key = {}, values = {} }) {
+    const cols = await this.columnsOf(schema, table);
+    const byName = new Map(cols.map(c => [c.name, c]));
+    const pk = cols.filter(c => c.primary_key).map(c => c.name);
+    for (const n of [...Object.keys(values), ...Object.keys(key)]) {
+      if (!byName.has(n)) throw sqlError(`Unknown column ${n}`);
+    }
+    const ident = `${escapeIdentifier(schema)}.${escapeIdentifier(table)}`;
+    const params = [];
+    const p = v => { params.push(v === undefined ? null : v); return `$${params.length}`; };
+    let sql;
+    if (op === 'insert') {
+      const names = Object.keys(values).filter(n => !byName.get(n).readonly);
+      sql = names.length
+        ? `insert into ${ident} (${names.map(escapeIdentifier).join(', ')}) values (${names.map(n => p(values[n])).join(', ')}) returning *`
+        : `insert into ${ident} default values returning *`;
+    } else if (op === 'update' || op === 'delete') {
+      if (!pk.length) throw sqlError('This table has no primary key, so rows cannot be edited safely. Add one first (see Advisors).');
+      if (!pk.every(n => n in key)) throw sqlError('Missing primary key value');
+      const where = pk.map(n => `${escapeIdentifier(n)} = ${p(key[n])}`).join(' and ');
+      if (op === 'delete') sql = `delete from ${ident} where ${where} returning *`;
+      else {
+        const names = Object.keys(values).filter(n => !byName.get(n).readonly);
+        if (!names.length) throw sqlError('Nothing to change');
+        const sets = names.map(n => `${escapeIdentifier(n)} = ${p(values[n])}`).join(', ');
+        sql = `update ${ident} set ${sets} where ${where} returning *`;
+      }
+    } else throw sqlError(`Unknown operation ${op}`);
+    return this.tx(async client => {
+      const r = await client.query(sql, params);
+      if (op !== 'insert' && r.rowCount !== 1) throw sqlError(`Expected to change 1 row, matched ${r.rowCount}; nothing was changed.`);
+      return { op, row: rowSafe(r.rows[0]) };
+    });
+  }
+
+  async exportCsv(schema, table, maxRows = 100000) {
+    const cols = await this.columnsOf(schema, table);
+    const pool = await this.getPool();
+    const ident = `${escapeIdentifier(schema)}.${escapeIdentifier(table)}`;
+    const r = await pool.query(`select * from ${ident} limit ${Number(maxRows) | 0}`);
+    const names = cols.map(c => c.name);
+    return csv.stringify(names, r.rows.map(row => names.map(n => jsonSafe(row[n]))));
+  }
+
+  // Appends rows. Header must name existing columns. Empty cells become NULL (so defaults do not apply).
+  // All-or-nothing: any bad row rolls the whole import back.
+  async importCsv(schema, table, text, { maxRows = 50000 } = {}) {
+    const cols = await this.columnsOf(schema, table);
+    const known = new Set(cols.map(c => c.name));
+    const rows = csv.parse(text);
+    if (rows.length < 2) throw sqlError('CSV needs a header row and at least one data row');
+    const header = rows[0].map(h => h.trim());
+    const bad = header.filter(h => !known.has(h));
+    if (bad.length) throw sqlError(`Not columns of ${schema}.${table}: ${bad.join(', ')}`);
+    if (new Set(header).size !== header.length) throw sqlError('Duplicate column in header');
+    const data = rows.slice(1);
+    if (data.length > maxRows) throw sqlError(`Too many rows (${data.length}); limit is ${maxRows}`);
+    data.forEach((r, i) => { if (r.length !== header.length) throw sqlError(`Row ${i + 2} has ${r.length} fields, header has ${header.length}`); });
+    const ident = `${escapeIdentifier(schema)}.${escapeIdentifier(table)}`;
+    const colList = header.map(escapeIdentifier).join(', ');
+    const batch = Math.max(1, Math.min(500, Math.floor(60000 / header.length)));
+    return this.tx(async client => {
+      let inserted = 0;
+      for (let i = 0; i < data.length; i += batch) {
+        const chunk = data.slice(i, i + batch);
+        const params = [];
+        const tuples = chunk.map(r => `(${r.map(v => { params.push(v === '' ? null : v); return `$${params.length}`; }).join(', ')})`);
+        try {
+          inserted += (await client.query(`insert into ${ident} (${colList}) values ${tuples.join(', ')}`, params)).rowCount;
+        } catch (e) {
+          throw sqlError(`Rows ${i + 2}-${i + 1 + chunk.length}: ${e.message}. Nothing was imported.`);
+        }
+      }
+      return { inserted };
+    });
+  }
+
+  async tx(fn) {
+    const pool = await this.getPool();
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      await client.query(`set local statement_timeout = '60s'`);
+      const out = await fn(client);
+      await client.query('commit');
+      return out;
+    } catch (e) {
+      await client.query('rollback').catch(() => {});
+      if (!e.sql) { const err = sqlError(e.message); throw err; }
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
   async table(schema, name, { limit = 100, offset = 0 } = {}) {

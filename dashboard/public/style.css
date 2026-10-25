@@ -118,3 +118,18 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--muted);
 .advisor-fix { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
 .advisor-fix pre { flex: 1 1 260px; margin: 0; padding: 8px; background: #0d131b; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
 .query-cell { min-width: 260px; max-width: 520px; white-space: pre-wrap; word-break: break-word; }
+
+/* Connect panel, table editor, backups */
+.copy-block { display: flex; gap: 10px; align-items: flex-start; }
+.copy-block pre { flex: 1; margin: 0; padding: 10px; background: #0d131b; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
+.warn-box { margin: 6px 0; padding: 8px 10px; border-radius: 6px; background: rgba(240, 180, 41, .12); color: var(--warn); }
+a.button, label.button { display: inline-block; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); text-decoration: none; cursor: pointer; background: #0e141c; }
+a.button.small, label.button.small { padding: 3px 9px; font-size: 13px; }
+.table-tools { gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.panel.inset { background: #0d131b; margin: 8px 0; }
+.row-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin: 8px 0 12px; }
+.row-fields .field { display: flex; flex-direction: column; gap: 4px; }
+.row-fields input { width: 100%; }
+.row-actions { white-space: nowrap; }
+.row-actions > * { margin-right: 4px; }
+pre.output { padding: 10px; background: #0d131b; border-radius: 6px; white-space: pre-wrap; max-height: 320px; overflow: auto; }

@@ -84,8 +84,20 @@
             <input id="db-new-name" placeholder="new app schema, e.g. janseva" pattern="[a-z][a-z0-9_]{1,30}" required>
             <button type="submit">Create project</button>
           </form>
-          <table class="list"><thead><tr><th>Schema</th><th>Tables</th><th>Size</th><th>API</th><th>RLS</th></tr></thead>
+          <table class="list"><thead><tr><th>Schema</th><th>Tables</th><th>Size</th><th>API</th><th>RLS</th><th></th></tr></thead>
             <tbody id="db-project-list"></tbody></table>
+        </div>
+        <div class="panel hidden" id="db-connect-panel">
+          <h2>Connect <span id="db-connect-name" class="mono"></span> <button id="db-connect-close" class="ghost small">Close</button></h2>
+          <div id="db-connect-warn"></div>
+          <h3>1. Environment variables <span class="muted small">Vercel: Project → Settings → Environment Variables, or <span class="mono">.env.local</span></span></h3>
+          <div class="copy-block"><pre id="db-connect-env" class="mono small"></pre><button class="ghost small" data-copy="db-connect-env">Copy</button></div>
+          <h3>2. Client <span class="muted small">npm i @supabase/supabase-js</span></h3>
+          <div class="copy-block"><pre id="db-connect-snippet" class="mono small"></pre><button class="ghost small" data-copy="db-connect-snippet">Copy</button></div>
+          <h3>3. Sign-in redirects</h3>
+          <p class="muted small">If the app uses Supabase Auth, allow its URL once on the Pi:
+            <span class="mono">supabase/auth-urls.sh add 'https://&lt;app&gt;.vercel.app/**'</span></p>
+          <p id="db-connect-redirects" class="muted small"></p>
         </div>
         <div class="panel hidden" id="db-tables-panel">
           <h2>Tables in <span id="db-schema-name" class="mono"></span></h2>
@@ -100,6 +112,18 @@
           <h3>Policies</h3>
           <div id="db-policies"></div>
           <h3>Rows <span class="pager"><button id="db-prev" class="ghost small">◀</button> <span id="db-page" class="muted small"></span> <button id="db-next" class="ghost small">▶</button></span></h3>
+          <div class="row table-tools">
+            <button id="db-add-row" class="small">+ Add row</button>
+            <a id="db-export" class="button ghost small" download>Export CSV</a>
+            <label class="button ghost small file-pick">Import CSV<input type="file" id="db-import" accept=".csv,text/csv" hidden></label>
+            <span id="db-edit-msg" class="muted small"></span>
+          </div>
+          <form id="db-row-form" class="panel inset hidden">
+            <h3 id="db-row-form-title"></h3>
+            <p class="muted small">Leave a field empty to use the column's default on insert. Type <span class="mono">NULL</span> for null.</p>
+            <div id="db-row-fields" class="row-fields"></div>
+            <div class="row"><button type="submit">Save</button> <button type="button" id="db-row-cancel" class="ghost">Cancel</button></div>
+          </form>
           <div class="scroll"><table class="list grid-data" id="db-rows"></table></div>
         </div>
       </div>
@@ -182,8 +206,13 @@
     <section id="tab-backups" class="tab">
       <div class="panel">
         <h2>Database backups</h2>
+        <div class="row">
+          <button id="b-run">Back up now</button>
+          <span id="b-status" class="muted small"></span>
+        </div>
         <p id="b-error" class="error"></p>
-        <table class="list"><thead><tr><th>File</th><th>Size</th><th>Age</th></tr></thead>
+        <pre id="b-output" class="mono small output hidden"></pre>
+        <table class="list"><thead><tr><th>File</th><th>Size</th><th>Age</th><th></th></tr></thead>
           <tbody id="backups"></tbody></table>
       </div>
     </section>
