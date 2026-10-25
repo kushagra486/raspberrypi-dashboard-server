@@ -5,7 +5,12 @@ relevant, never do them for him, and tick them off here once he confirms.
 
 ## Open
 
-- [ ] **Save passwords in a password manager** (Bitwarden or KeePassXC), then delete
+- [ ] **Rotate the Supabase secrets** (the `.env` contents were pasted into a chat on
+      2026-10-25). Owner sends the rotation request in a Claude session that can reach the
+      Pi; that session takes a backup first and never prints the new values. Afterwards:
+      re-save the "Supabase .env backup" parts 1–2, "Supabase keys (Pi)" and the Studio
+      password in Bitwarden (the saved ones hold the old values).
+- [ ] **Save passwords in a password manager** (mostly done 2026-10-25; redo the Supabase entries after rotation) (Bitwarden or KeePassXC), then delete
       `~/pi-console-password.txt` on the Pi. Steps:
   1. `ssh stdio@raspberrypi`
   2. Pi Console: `cat ~/pi-console-password.txt` → save as "Pi Console",
@@ -31,3 +36,5 @@ relevant, never do them for him, and tick them off here once he confirms.
 - [x] Tailscale login, Funnel enabled, access policy applied, Pi tagged `tag:pi` (2026-10-24)
 - [x] `TS_AUTHKEY` stored in the cloud environment; Claude session access verified (2026-10-24)
 - [x] Decision: no domain, no Cloudflare (2026-10-24)
+- [x] Bitwarden set up; Pi Console password reset with `npm run set-password` and saved;
+      `~/pi-console-password.txt` gone; `.env` saved as two secure notes (2026-10-25)
