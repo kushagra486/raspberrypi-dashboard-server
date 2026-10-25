@@ -132,6 +132,8 @@ test('advisors: security and performance findings with fixes', { skip: !enabled 
 });
 
 test('query insights from pg_stat_statements', { skip: !enabled }, async () => {
+  // start from empty statistics so the result does not depend on what other tests ran
+  await json('/api/db/sql', { method: 'POST', body: JSON.stringify({ sql: 'select extensions.pg_stat_statements_reset()', readOnly: false }) });
   await json('/api/db/sql', { method: 'POST', body: JSON.stringify({ sql: 'select count(*) from janseva.complaints where title like $$%9%$$' }) });
   const { status, body } = await json('/api/db/insights?sort=calls');
   assert.strictEqual(status, 200);
