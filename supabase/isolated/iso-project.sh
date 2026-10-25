@@ -17,6 +17,7 @@
 #                                           schema, then drop it and remove it from the main API
 #   ./iso-project.sh sleep-mode NAME auto|off [MINUTES]   auto: stop when idle (default 30 min), wake on the
 #                                           next request (Pi Console does the waking); off: always on
+#   ./iso-project.sh schemas NAME a,b       which schemas the project's API serves (default: public)
 #   ./iso-project.sh apply                  regenerate proxy/compose from the project folders and (re)start
 #   ./iso-project.sh lockdown               only existing logins may connect to the main database
 #   ./iso-project.sh funnel                 publish /p on the internet (Tailscale Funnel), once
@@ -420,6 +421,16 @@ retire_shared() {  # SCHEMA --confirm
   echo "shared copy of $sch removed; the isolated project is the only copy now"
 }
 
+set_schemas() {  # NAME a,b,c
+  local n="$1" list="${2:-}"; need_name "$n"; [ -d "$(pdir "$n")" ] || die "no isolated project $n"
+  [[ "$list" =~ ^[a-z_][a-z0-9_]*(,[a-z_][a-z0-9_]*)*$ ]] || die "schemas: comma-separated schema names"
+  sed -i "s|^API_SCHEMAS=.*|API_SCHEMAS=$list|" "$(pdir "$n")/project.env"
+  write_service_envs "$n"
+  (cd "$ISO_DIR" && "${COMPOSE[@]}" up -d --force-recreate --no-deps "rest_$n" >/dev/null 2>&1)
+  wait_ready "$n"
+  echo "$n API serves: $list"
+}
+
 sleep_mode() {  # NAME auto|off [MINUTES]
   local n="$1" mode="$2" mins="${3:-30}"; need_name "$n"; [ -d "$(pdir "$n")" ] || die "no isolated project $n"
   case "$mode" in auto|off) ;; *) die "mode: auto or off";; esac
@@ -453,10 +464,11 @@ case "$cmd" in
   remove)   remove "${1:-}" "${2:-}" ;;
   migrate)  migrate "${1:-}" ;;
   sleep-mode) sleep_mode "${1:-}" "${2:-}" "${3:-}" ;;
+  schemas)    set_schemas "${1:-}" "${2:-}" ;;
   retire-shared) retire_shared "${1:-}" "${2:-}" ;;
   list)     list ;;
   apply)    for p in $(projects); do write_service_envs "$p"; done; apply ;;
   lockdown) lockdown ;;
   funnel)   funnel ;;
-  *) sed -n 2,25p "$0"; exit 1 ;;
+  *) sed -n 2,26p "$0"; exit 1 ;;
 esac
