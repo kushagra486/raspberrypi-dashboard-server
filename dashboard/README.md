@@ -1,6 +1,16 @@
 # Pi Console
 
-One dashboard for the Pi, in the browser, on any device.
+One dashboard for the Pi, in the browser, on any device. Laid out like supabase.com (glass theme):
+**All projects** (organizations with project cards) → open a project → its pages in the left rail
+(Overview, Table editor, SQL editor, Authentication, Storage, **Logs**, **Reports**, Advisors, Query
+performance, Connect, Project settings). The project switcher in the top bar changes project on any page.
+The lower half of the rail is the Pi itself (Server, Capacity, Services, Backups, Claude sessions, Links).
+
+| Page | What it does |
+|---|---|
+| **Logs** | Logs explorer per project: API gateway, Auth, REST, Storage, Realtime, Edge functions, Postgres, pooler (isolated projects: their own API, Auth and REST). Time range, level filter, search, live mode, a histogram of info/warnings/errors. Keys, tokens, passwords, connection-string passwords and emails are **redacted on the server** before anything is shown. Shared projects share one set of services, so their logs cover every shared project. |
+| **Reports** | API requests over time by status (2xx/4xx/5xx), response time (median and p95; isolated projects), busiest routes, status codes; database connections, transactions, rows written/read, cache hit rate and size (Pi Console samples every minute and keeps 24 h in `metrics.json`); sign-ups and sign-ins per day. |
+| **Server** | Live CPU, memory, disk, temperature, plus 24 h history charts. |
 
 | Tab | What it does |
 |---|---|

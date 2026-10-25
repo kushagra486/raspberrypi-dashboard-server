@@ -40,16 +40,32 @@ const fmtAge = ms => {
 };
 const fmtUptime = s => `${Math.floor(s / 86400)}d ${Math.floor(s % 86400 / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
 
-// ---- tabs
-let current = 'overview';
+// ---- navigation: the left rail. Project pages are data-tab="database" + data-db="<view>".
+let current = 'home';
 const loaders = {};
-document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => {
-  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('active', x === b));
+const rail = $('#tabs');
+function closeRail() { document.body.classList.remove('rail-open'); $('#rail-toggle').setAttribute('aria-expanded', 'false'); }
+document.querySelectorAll('#tabs button[data-tab]').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#tabs button[data-tab]').forEach(x => {
+    x.classList.toggle('active', x === b);
+    if (x === b) x.setAttribute('aria-current', 'page'); else x.removeAttribute('aria-current');
+  });
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.id === `tab-${b.dataset.tab}`));
   current = b.dataset.tab;
-  location.hash = current;
+  window.pcDbView = b.dataset.db || null;
+  if (current !== 'database') { try { history.replaceState(null, '', `#${current}`); } catch {} }
+  closeRail();
   loaders[current]?.();
 }));
+$('#rail-toggle').addEventListener('click', () => {
+  const open = document.body.classList.toggle('rail-open');
+  $('#rail-toggle').setAttribute('aria-expanded', String(open));
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeRail(); });
+// after choosing a page the rail folds away, even while the pointer still rests on it
+rail.addEventListener('click', e => { if (e.target.closest('button[data-tab]')) rail.classList.add('quiet'); });
+rail.addEventListener('mouseleave', () => rail.classList.remove('quiet'));
+rail.querySelector('.rail-logo').addEventListener('click', e => { e.preventDefault(); document.querySelector('#tabs button[data-tab="home"]').click(); });
 
 // ---- overview
 function meter(label, value, max, text) {
@@ -242,11 +258,12 @@ document.addEventListener('click', async e => {
 
 $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); location.href = '/login'; });
 
-// Start on the tab in the URL, refresh live tabs every 5 s.
+// Start on the page in the URL (#home, #capacity, #db/sql ...), refresh live pages every 5 s.
+// Pages whose code loads later (db.js) start their own loader once ready.
 const start = location.hash.slice(1);
-// Tabs whose code loads later (db.js) start their own loader once ready.
-const startBtn = document.querySelector(`#tabs button[data-tab="${CSS.escape(start)}"]`);
-(startBtn || document.querySelector('#tabs button[data-tab="overview"]')).click();
+const [startTab, startDb] = start.startsWith('db/') ? ['database', start.slice(3)] : [start, null];
+const startBtn = document.querySelector(`#tabs button[data-tab="${CSS.escape(startTab)}"]${startDb ? `[data-db="${CSS.escape(startDb)}"]` : ''}`);
+(startBtn || document.querySelector('#tabs button[data-tab="home"]')).click();
 setInterval(() => {
   if (document.hidden || !$('#term-view').classList.contains('hidden')) return;
   if (current === 'overview' || current === 'services') loaders[current]().catch(() => {});

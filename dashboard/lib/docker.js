@@ -46,10 +46,10 @@ class Docker {
   }
 
   // Log lines of the last `seconds` (no timestamps), capped to `maxLines`.
-  async logsSince(id, seconds, maxLines = 100000) {
+  async logsSince(id, seconds, maxLines = 100000, timestamps = false) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(id)) throw new Error('bad container id');
     const since = Math.floor(Date.now() / 1000) - Math.max(60, Number(seconds) | 0);
-    const buf = await this.request('GET', `/containers/${id}/logs?stdout=1&stderr=1&since=${since}&tail=${maxLines | 0}`, { raw: true });
+    const buf = await this.request('GET', `/containers/${id}/logs?stdout=1&stderr=1&since=${since}&tail=${maxLines | 0}${timestamps ? "&timestamps=1" : ""}`, { raw: true });
     return demux(buf);
   }
 

@@ -15,6 +15,9 @@ const { Snippets } = require('./lib/snippets');
 const { Sleeper } = require('./lib/sleeper');
 const capacity = require('./lib/capacity');
 const placement = require('./lib/placement');
+const logs = require('./lib/logs');
+const reports = require('./lib/reports');
+const { Metrics } = require('./lib/metrics');
 
 const cfg = config.load();
 const auth = new Auth({ passwordHash: cfg.passwordHash, ttlHours: cfg.sessionTtlHours });
@@ -24,6 +27,7 @@ const rootDatabase = new Database(cfg, docker);
 const backups = new Backups(cfg);
 const snippets = new Snippets(path.join(cfg.dataDir, 'snippets.json'));
 const sleeper = new Sleeper(cfg, docker, rootDatabase);
+const metrics = new Metrics(cfg, rootDatabase, system);
 
 const PUBLIC = path.join(config.ROOT, 'public');
 const VENDOR = {
@@ -100,6 +104,19 @@ async function api(req, res, url) {
   if (route === 'GET /api/system') return send(res, 200, await system.snapshot(cfg.disks));
   if (route === 'GET /api/links') return send(res, 200, cfg.links);
   if (route === 'GET /api/backups') return send(res, 200, await backups.list());
+  // ---- observability: logs explorer, reports, metric history (all read-only, secrets redacted)
+  if (route === 'GET /api/logs') {
+    try {
+      const sp = url.searchParams;
+      return send(res, 200, await logs.read({ docker, db: rootDatabase, project: sp.get('project') || '', source: sp.get('source') || 'api',
+        minutes: sp.get('minutes'), q: sp.get('q') || '', level: sp.get('level') || 'all', limit: sp.get('limit') }));
+    } catch (e) { return send(res, 400, { error: e.message }); }
+  }
+  if (route === 'GET /api/reports') {
+    try { return send(res, 200, await reports.build({ docker, db: rootDatabase, metrics, project: url.searchParams.get('project') || '', hours: url.searchParams.get('hours') })); }
+    catch (e) { return send(res, 400, { error: e.message }); }
+  }
+  if (route === 'GET /api/metrics/host') return send(res, 200, metrics.get('host', url.searchParams.get('hours')));
   // ---- capacity: placement advisor, sleep / wake
   if (route === 'GET /api/capacity') {
     try { return send(res, 200, await capacity.gather({ db: rootDatabase, docker, sleeper, cfg })); }
@@ -339,5 +356,6 @@ function attachTerminal(ws, target) {
 if (!cfg.passwordHash) console.warn('WARNING: no password set. Run `npm run set-password` before using the console.');
 server.listen(cfg.port, cfg.bind, () => console.log(`Pi Console on http://${cfg.bind}:${cfg.port}`));
 if (cfg.waker !== false) sleeper.start();
+if (cfg.metrics !== false) metrics.start();
 
 module.exports = { server };

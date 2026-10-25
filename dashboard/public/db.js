@@ -4,19 +4,33 @@
   let view = 'overview';
   // which database the screens act on: '' = main (shared projects), 'proj_<name>' = an isolated project
   let ctx = '';
-  try { ctx = localStorage.getItem('pc-db-ctx') || ''; } catch {}
   const withDb = p => ctx ? `${p}${p.includes('?') ? '&' : '?'}db=${encodeURIComponent(ctx)}` : p;
   const dbApi = (p, o) => api(withDb(p), o);
   let cur = { schema: null, table: null, offset: 0, limit: 100 };
   const err = m => { $('#db-error').textContent = m || ''; };
+  // the project every screen acts on (from /api/db/orgs); null = none chosen yet
+  let proj = null;
+  const TITLES = { overview: 'Project overview', tables: 'Table editor', sql: 'SQL editor', users: 'Authentication',
+    storage: 'Storage', logs: 'Logs', reports: 'Reports', advisors: 'Advisors', insights: 'Query performance',
+    connect: 'Connect', settings: 'Project settings' };
   const show = v => {
     view = v;
-    document.querySelectorAll('#db-nav button').forEach(b => b.classList.toggle('active', b.dataset.db === v));
+    if (!proj) { go('home'); return Promise.resolve(); }
+    if (current !== 'database') { go('database', v); return Promise.resolve(); }
+    document.querySelectorAll('#tabs button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.db === v));
     document.querySelectorAll('.db-view').forEach(d => d.classList.toggle('active', d.id === `db-${v}`));
+    $('#db-title').textContent = TITLES[v] || v;
+    $('#db-subtitle').textContent = proj ? `${proj.kind === 'isolated' ? proj.name : proj.schema}` : '';
+    try { history.replaceState(null, '', `#db/${v}`); } catch {}
     err('');
-    return (views[v] || (() => {}))().catch(e => err(e.message));
+    return (views[v] || (() => Promise.resolve()))().catch(e => err(e.message));
   };
-  document.querySelectorAll('#db-nav button').forEach(b => b.addEventListener('click', () => show(b.dataset.db)));
+  // navigate through the rail so app.js keeps one notion of the current page
+  function go(tab, db) {
+    const b = document.querySelector(`#tabs button[data-tab="${tab}"]${db ? `[data-db="${db}"]` : ''}`);
+    if (b) b.click();
+  }
+  window.pcGo = go;
 
   const card = (label, value, sub) => el('div', { class: 'card' },
     el('div', { class: 'card-label' }, label), el('div', { class: 'card-value' }, value),
@@ -54,15 +68,14 @@
         }
       } catch {}
       $('#db-cards').replaceChildren(...cards);
+      await openOverview(proj.schema);
     },
 
-    async projects() {
-      const orgs = await api('/api/db/orgs');
-      orgCache = orgs;
-      renderContext();
-      $('#db-orgs').replaceChildren(...orgs.map(renderOrg));
-      if (cur.schema) await openSchema(cur.schema, true);
-    },
+    async tables() { await openSchema(appSchemaOf(proj), !!cur.table); },
+    async connect() { await openConnect(proj.schema); },
+    async settings() { renderSettings(); },
+    async logs() { if (window.pcObs) await window.pcObs.logs(proj); },
+    async reports() { if (window.pcObs) await window.pcObs.reports(proj); },
 
     async sql() {
       $('#sql-input').focus();
@@ -121,9 +134,6 @@
     const list = advisorData.filter(a => cat === 'all' || a.category === cat);
     const n = l => advisorData.filter(a => a.level === l).length;
     $('#adv-summary').textContent = `${n('error')} errors · ${n('warn')} warnings · ${n('info')} suggestions`;
-    const badge = $('#db-adv-badge');
-    badge.textContent = String(n('error'));
-    badge.classList.toggle('hidden', n('error') === 0);
     $('#adv-list').replaceChildren(...(list.length ? list.map(a => el('div', { class: `advisor level-${a.level}` },
       el('div', { class: 'advisor-head' },
         el('span', { class: `tag ${levelTag[a.level]}` }, a.level), ' ',
@@ -252,17 +262,64 @@
     } catch (e2) { err(e2.message); }
   });
 
+  // ---- home: organizations, each with a grid of project cards
+  function renderHome() {
+    const root = $('#home-orgs');
+    if (!root) return;
+    root.replaceChildren(...orgCache.map(o => {
+      const org = renderOrg(o);
+      return org;
+    }));
+  }
+  function projectCard(p) {
+    const iso = p.kind === 'isolated';
+    const open = () => selectProject(p.schema).then(() => go('database', 'overview')).catch(e => homeErr(e.message));
+    const rls = p.tables_without_rls ? el('span', { class: 'tag exited', title: 'Tables without row level security are open to anyone with the public key' }, `${p.tables_without_rls} without RLS`) : '';
+    return el('button', { class: 'proj-card', type: 'button', onclick: open, 'aria-label': `Open ${labelOf(p)}` },
+      el('span', { class: 'proj-card-top' },
+        el('span', { class: 'proj-name' }, labelOf(p)),
+        iso ? el('span', { class: 'tag claude' }, 'own users') : p.schema.endsWith('_dev') ? el('span', { class: 'tag' }, 'branch') : el('span', { class: 'tag' }, 'shared')),
+      el('span', { class: 'proj-stats' },
+        el('span', {}, el('b', {}, p.error ? '?' : String(p.tables)), ' tables'),
+        el('span', {}, el('b', {}, p.error ? '?' : fmtBytes(Number(p.size)))),
+        iso ? el('span', {}, el('b', {}, String(p.users ?? '?')), p.users === 1 ? ' user' : ' users')
+          : el('span', {}, p.api ? 'API on' : 'API off')),
+      rls);
+  }
+  const homeErr = m => { const e = $('#home-error'); if (e) e.textContent = m || ''; };
+  loaders.home = async () => {
+    homeErr('');
+    if (!orgCache.length) $('#home-orgs').replaceChildren(el('p', { class: 'muted' }, 'Loading projects…'));
+    try { await refreshOrgs(); } catch (e) { $('#home-orgs').replaceChildren(); homeErr(`Could not load projects: ${e.message}. Is the database running? (Services)`); }
+    try { history.replaceState(null, '', '#home'); } catch {}
+  };
+
+  // ---- project settings: everything that changes the project itself
+  function renderSettings() {
+    const p = proj, o = orgOfKey(p.schema);
+    const facts = el('dl', { class: 'facts' },
+      el('dt', {}, 'Name'), el('dd', { class: 'mono' }, labelOf(p)),
+      el('dt', {}, 'Type'), el('dd', {}, p.kind === 'isolated' ? 'Isolated: its own database, sign-up users and API keys' : 'Shared: a schema in the main database (shared URL, key and users)'),
+      el('dt', {}, 'Database'), el('dd', { class: 'mono' }, p.kind === 'isolated' ? p.database : `postgres, schema ${p.schema}`),
+      el('dt', {}, 'Organization'), el('dd', {}, o ? o.name : '–'));
+    const acts = p.kind === 'isolated' ? isolatedActions(p) : projectActions(p).filter(b => !/^(Overview|Connect)$/.test(b.textContent));
+    const move = o ? moveSelect(p, o) : '';
+    $('#db-settings-body').replaceChildren(facts,
+      el('h3', {}, 'Actions'),
+      el('div', { class: 'row settings-actions' }, ...acts, move || el('span', { class: 'muted small' }, 'Create another organization to move projects between them.')));
+  }
+
   // ---- organizations
   let orgCache = [];
   function renderOrg(o) {
     const iso = el('input', { type: 'checkbox' });
-    const form = el('form', { class: 'row org-new-project' },
-      el('input', { placeholder: 'new project, e.g. myshop', pattern: '[a-z][a-z0-9_]{1,30}', required: '', 'aria-label': `New project in ${o.name}` }),
+    const form = el('form', { class: 'org-new-project' },
+      el('input', { placeholder: 'name, e.g. myshop', pattern: '[a-z][a-z0-9_]{1,30}', required: '', title: 'lowercase letters, digits and _', 'aria-label': `New project in ${o.name}` }),
       el('label', { class: 'check small', title: 'Own database, own sign-up users, own API keys: nothing shared with other projects' },
-        iso, ' Own users & database'),
-      el('button', { type: 'submit', class: 'small' }, '+ New project'));
+        iso, ' Its own users and database'),
+      el('button', { type: 'submit', class: 'small' }, 'Create project'));
     form.addEventListener('submit', async e => {
-      e.preventDefault(); err('');
+      e.preventDefault(); homeErr('');
       const name = form.querySelector('input[pattern]').value;
       const isolated = iso.checked;
       const what = isolated
@@ -271,91 +328,91 @@
       if (!confirm(what)) return;
       const btn = form.querySelector('button'); btn.disabled = true; btn.textContent = 'Creating…';
       try {
-        if (isolated) {
-          await api('/api/db/isolated', { method: 'POST', body: { name, orgId: o.id } });
-          await views.projects(); await useContext(`proj_${name}`); await openSchema('public');
-        } else {
-          await api('/api/db/projects', { method: 'POST', body: { name, orgId: o.id } });
-          await views.projects(); await openSchema(name);
-        }
-      } catch (e2) { err(e2.message); }
-      btn.disabled = false; btn.textContent = '+ New project';
+        if (isolated) await api('/api/db/isolated', { method: 'POST', body: { name, orgId: o.id } });
+        else await api('/api/db/projects', { method: 'POST', body: { name, orgId: o.id } });
+        await refreshOrgs();
+        await selectProject(isolated ? `iso:${name}` : name);
+        go('database', 'tables');
+      } catch (e2) { homeErr(e2.message); }
+      btn.disabled = false; btn.textContent = 'Create project';
     });
     const head = el('div', { class: 'org-head' },
-      el('h3', {}, o.name, ' ', o.is_default ? el('span', { class: 'tag' }, 'default') : '', ' ',
-        el('span', { class: 'muted small' }, `${o.projects.length} project${o.projects.length === 1 ? '' : 's'}`)),
+      el('h2', {}, o.name, ' ', el('span', { class: 'muted small' }, `${o.projects.length} project${o.projects.length === 1 ? '' : 's'}`)),
       el('span', { class: 'org-actions' },
         el('button', { class: 'ghost small', onclick: async () => {
           const name = prompt('Rename organization:', o.name);
           if (!name || name === o.name) return;
-          try { await api('/api/db/orgs', { method: 'PATCH', body: { id: o.id, name } }); await views.projects(); } catch (e) { err(e.message); }
+          try { await api('/api/db/orgs', { method: 'PATCH', body: { id: o.id, name } }); await refreshOrgs(); } catch (e) { homeErr(e.message); }
         } }, 'Rename'),
         o.is_default ? '' : el('button', { class: 'ghost small danger', onclick: async () => {
           if (!confirm(`Delete the organization "${o.name}"? Only empty organizations can be deleted; no data is touched.`)) return;
-          try { await api(`/api/db/orgs?id=${o.id}`, { method: 'DELETE' }); await views.projects(); } catch (e) { err(e.message); }
+          try { await api(`/api/db/orgs?id=${o.id}`, { method: 'DELETE' }); await refreshOrgs(); } catch (e) { homeErr(e.message); }
         } }, 'Delete')));
-    const rows = o.projects.length ? o.projects.map(p => p.kind === 'isolated' ? isolatedRow(p, o) : el('tr', { class: 'clickable', onclick: () => useContext('').then(() => openSchema(p.schema)) },
-      el('td', {}, el('b', {}, p.schema), p.schema.endsWith('_dev') ? el('span', { class: 'tag' }, 'branch') : ''),
-      el('td', {}, String(p.tables)),
-      el('td', {}, fmtBytes(Number(p.size))),
-      el('td', {}, p.api ? el('span', { class: 'tag running' }, 'exposed') : el('span', { class: 'tag' }, 'private')),
-      el('td', {}, p.tables_without_rls
-        ? el('span', { class: 'tag exited', title: 'Tables without row level security are readable/writable with the public key if exposed' }, `${p.tables_without_rls} without RLS`)
-        : el('span', { class: 'tag running' }, p.tables ? 'all on' : '–')),
-      el('td', { class: 'row-actions' }, ...projectActions(p), moveSelect(p, o))))
-      : [el('tr', {}, el('td', { colspan: 6, class: 'muted' }, 'No projects yet.'))];
-    return el('div', { class: 'org' }, head, form,
-      el('div', { class: 'scroll' }, el('table', { class: 'list' },
-        el('thead', {}, el('tr', {}, ...['Project', 'Tables', 'Size', 'API', 'RLS', ''].map(h => el('th', {}, h)))),
-        el('tbody', { 'data-org': String(o.id) }, ...rows))));
+    return el('section', { class: 'org', 'aria-label': o.name }, head,
+      el('div', { class: 'proj-grid' }, ...o.projects.map(projectCard),
+        el('div', { class: 'proj-card new' }, el('span', { class: 'proj-name' }, 'New project'), form)));
   }
-  function isolatedRow(p, o) {
-    const open = () => useContext(p.database).then(() => openSchema(p.appSchema || 'public'));
-    return el('tr', { class: 'clickable', onclick: () => open().catch(e => err(e.message)) },
-      el('td', {}, el('b', {}, p.name), ' ', el('span', { class: 'tag claude', title: 'Own database, own users, own keys' }, 'isolated'),
-        p.sharedCopy ? el('span', { class: 'tag warn', title: 'The shared copy still exists until you retire it' }, ' shared copy kept') : ''),
-      el('td', {}, p.error ? '?' : String(p.tables)),
-      el('td', {}, p.error ? '?' : fmtBytes(Number(p.size))),
-      el('td', {}, el('span', { class: 'tag running' }, p.users === 1 ? '1 user' : `${p.users ?? '?'} users`)),
-      el('td', {}, p.tables_without_rls
-        ? el('span', { class: 'tag exited' }, `${p.tables_without_rls} without RLS`)
-        : el('span', { class: 'tag running' }, p.tables ? 'all on' : '–')),
-      el('td', { class: 'row-actions' },
-        el('button', { class: 'ghost small', onclick: stop(() => openOverview(p.schema)) }, 'Overview'),
-        el('button', { class: 'ghost small', onclick: stop(() => openConnect(p.schema)) }, 'Connect'),
-        p.sharedCopy ? el('button', { class: 'ghost small danger', title: 'Drop the old shared copy (a final backup is kept)', onclick: stop(async () => {
-          if (prompt(`Retire the SHARED copy of ${p.name}? Do this only after your app uses the new URL and key. A final backup of the shared copy is kept in /mnt/data/backups/${p.name}. Type ${p.name} to confirm:`) !== p.name) return;
-          const r = await api('/api/db/retire-shared', { method: 'POST', body: { schema: p.name } });
-          alert(`Shared copy of ${p.name} retired.${r.finalBackup ? ` Final backup: ${r.finalBackup}` : ''}`);
-          await views.projects();
-        }) }, 'Retire shared copy') : '',
-        el('button', { class: 'ghost small danger', onclick: stop(async () => {
-          if (prompt(`Delete the isolated project ${p.name}: its database, ALL its users and data? A final backup is kept in /mnt/data/backups/${p.name}. Type its name to confirm:`) !== p.name) return;
-          const r = await api(`/api/db/isolated?name=${encodeURIComponent(p.name)}`, { method: 'DELETE' });
-          if (ctx === p.database) await useContext('');
-          alert(`Deleted ${p.name}.${r.finalBackup ? ` Final backup: ${r.finalBackup}` : ''}`);
-          await views.projects();
-        }) }, 'Delete'),
-        moveSelect(p, o)));
+  function isolatedActions(p) {
+    return [
+      p.sharedCopy ? el('button', { class: 'ghost small danger', title: 'Drop the old shared copy (a final backup is kept)', onclick: stop(async () => {
+        if (prompt(`Retire the SHARED copy of ${p.name}? Do this only after your app uses the new URL and key. A final backup of the shared copy is kept in /mnt/data/backups/${p.name}. Type ${p.name} to confirm:`) !== p.name) return;
+        const r = await api('/api/db/retire-shared', { method: 'POST', body: { schema: p.name } });
+        alert(`Shared copy of ${p.name} retired.${r.finalBackup ? ` Final backup: ${r.finalBackup}` : ''}`);
+        await refreshOrgs(); renderSettings();
+      }) }, 'Retire shared copy') : '',
+      el('button', { class: 'ghost small danger', onclick: stop(async () => {
+        if (prompt(`Delete the isolated project ${p.name}: its database, ALL its users and data? A final backup is kept in /mnt/data/backups/${p.name}. Type its name to confirm:`) !== p.name) return;
+        const r = await api(`/api/db/isolated?name=${encodeURIComponent(p.name)}`, { method: 'DELETE' });
+        await selectProject('');
+        alert(`Deleted ${p.name}.${r.finalBackup ? ` Final backup: ${r.finalBackup}` : ''}`);
+        go('home');
+      }) }, 'Delete project')].filter(Boolean);
   }
-
-  // ---- database context switcher
-  function renderContext() {
-    const isos = orgCache.flatMap(o => o.projects.filter(p => p.kind === 'isolated'));
-    const sel = $('#db-context');
-    sel.replaceChildren(el('option', { value: '' }, 'Main database (shared projects)'),
-      ...isos.map(p => el('option', { value: p.database }, `${p.name} (isolated)`)));
-    if (ctx && !isos.some(p => p.database === ctx)) setCtx('');
-    sel.value = ctx;
+  // ---- current project: switcher in the top bar, breadcrumb, which database screens use
+  const appSchemaOf = p => (p.kind === 'isolated' ? (p.appSchema || 'public') : p.schema);
+  const labelOf = p => (p.kind === 'isolated' ? p.name : p.schema);
+  const orgOfKey = key => orgCache.find(o => o.projects.some(p => p.schema === key));
+  async function refreshOrgs() {
+    orgCache = await api('/api/db/orgs');
+    if (proj) proj = orgCache.flatMap(o => o.projects).find(p => p.schema === proj.schema) || null;
+    renderSwitcher();
+    renderHome();
+    return orgCache;
   }
+  function renderSwitcher() {
+    const sel = $('#proj-switch');
+    sel.replaceChildren(el('option', { value: '' }, 'All projects'),
+      ...orgCache.map(o => el('optgroup', { label: o.name }, ...o.projects.map(p =>
+        el('option', { value: p.schema }, `${labelOf(p)}${p.kind === 'isolated' ? '  (own users)' : ''}`)))));
+    sel.value = proj ? proj.schema : '';
+    const o = proj && orgOfKey(proj.schema);
+    $('#crumb-org').textContent = o ? o.name : 'Pi Console';
+    $('#crumb-kind').replaceChildren(proj ? el('span', { class: `tag ${proj.kind === 'isolated' ? 'claude' : ''}` },
+      proj.kind === 'isolated' ? 'own users & database' : 'shared database') : '');
+    document.body.classList.toggle('has-project', !!proj);
+  }
+  async function selectProject(key) {
+    const p = key ? orgCache.flatMap(o => o.projects).find(x => x.schema === key) : null;
+    try { localStorage.setItem('pc-proj', p ? p.schema : ''); } catch {}
+    const changed = (proj && proj.schema) !== (p && p.schema);
+    proj = p;
+    if (changed) {
+      await useContext(p && p.kind === 'isolated' ? p.database : '', true);
+      cur = { schema: p ? appSchemaOf(p) : null, table: null, offset: 0, limit: 100 };
+    }
+    renderSwitcher();
+  }
+  $('#proj-switch').addEventListener('change', async () => {
+    const v = $('#proj-switch').value;
+    await selectProject(v);
+    if (v) go('database', current === 'database' ? view : 'overview'); else go('home');
+  });
   function setCtx(v) {
     ctx = v;
-    try { localStorage.setItem('pc-db-ctx', v); } catch {}
-    if ($('#db-context').value !== v) $('#db-context').value = v;
     document.body.classList.toggle('db-isolated', !!v);
   }
-  async function useContext(v) {
-    if (v === ctx) return;
+  async function useContext(v, force) {
+    if (v === ctx && !force) return;
     setCtx(v);
     cur = { schema: null, table: null, offset: 0, limit: 100 };
     ['#db-tables-panel', '#db-table-panel', '#db-diagram-panel', '#db-branch-panel'].forEach(x => $(x).classList.add('hidden'));
@@ -364,11 +421,6 @@
     ['#sql-meta', '#adv-summary', '#ins-meta'].forEach(x => { if ($(x)) $(x).textContent = ''; });
     err('');
   }
-  $('#db-context').addEventListener('change', async () => {
-    await useContext($('#db-context').value);
-    if (view === 'projects' && ctx) await openSchema('public').catch(e => err(e.message));
-    else await show(view);
-  });
 
   function moveSelect(p, o) {
     if (p.schema === 'public' || p.schema.endsWith('_dev') || orgCache.length < 2) return '';
@@ -378,15 +430,15 @@
     sel.addEventListener('click', ev => ev.stopPropagation());
     sel.addEventListener('change', async () => {
       if (!sel.value) return;
-      try { await api('/api/db/projects/move', { method: 'POST', body: { schema: p.schema, orgId: Number(sel.value) } }); await views.projects(); }
+      try { await api('/api/db/projects/move', { method: 'POST', body: { schema: p.schema, orgId: Number(sel.value) } }); await refreshOrgs(); if (current === 'database') renderSettings(); }
       catch (e) { err(e.message); }
     });
     return sel;
   }
   $('#db-new-org').addEventListener('submit', async e => {
-    e.preventDefault(); err('');
-    try { await api('/api/db/orgs', { method: 'POST', body: { name: $('#db-new-org-name').value } }); $('#db-new-org-name').value = ''; await views.projects(); }
-    catch (e2) { err(e2.message); }
+    e.preventDefault(); homeErr('');
+    try { await api('/api/db/orgs', { method: 'POST', body: { name: $('#db-new-org-name').value } }); $('#db-new-org-name').value = ''; await refreshOrgs(); }
+    catch (e2) { homeErr(e2.message); }
   });
 
   // ---- project actions: connect, branch, reset / delete branch
@@ -402,13 +454,13 @@
         const withData = confirm(`Reset ${p.schema} from ${source}?\n\nOK = copy structure AND rows\nCancel = choose structure only`);
         if (!withData && !confirm(`Reset ${p.schema} with structure only (empty tables)? Everything in ${p.schema} is replaced.`)) return;
         const r = await api('/api/db/branch', { method: 'POST', body: { schema: source, withData, reset: true } });
-        err(''); alert(branchSummary(r)); await views.projects();
+        err(''); alert(branchSummary(r)); await refreshOrgs();
       }) }, 'Reset'));
       acts.push(el('button', { class: 'ghost small danger', onclick: stop(async () => {
         if (prompt(`Delete branch ${p.schema} and all its data? Type its name to confirm:`) !== p.schema) return;
         await api(`/api/db/branch?schema=${encodeURIComponent(p.schema)}`, { method: 'DELETE' });
-        if (cur.schema === p.schema) { cur.schema = null; $('#db-tables-panel').classList.add('hidden'); $('#db-table-panel').classList.add('hidden'); }
-        await views.projects();
+        if (proj && proj.schema === p.schema) { await selectProject(''); go('home'); }
+        await refreshOrgs();
       }) }, 'Delete'));
     } else {
       acts.push(el('button', { class: 'ghost small', onclick: stop(async () => openBranch(p.schema)) }, 'Branch'));
@@ -417,9 +469,9 @@
           if (!confirm(`Make "${p.schema}" isolated?\n\nIt is copied into its own database with its own sign-up users and API keys, and every table's row count is checked. The shared copy is NOT changed: your app keeps working until you switch it to the new URL and key, then press "Retire shared copy".\n\nTakes up to a minute.`)) return;
           err(''); const btn = document.activeElement; if (btn) { btn.disabled = true; btn.textContent = 'Copying…'; }
           const r = await api('/api/db/make-isolated', { method: 'POST', body: { schema: p.schema } });
-          await views.projects();
+          await refreshOrgs();
           alert(`${p.schema} is now also an isolated project.\nVerified: ${r.verified || 'no tables'}.\n\nNext: Connect shows its new URL and key for your app. After the app works with them, press "Retire shared copy".`);
-          await openConnect(`iso:${p.schema}`);
+          await selectProject(`iso:${p.schema}`); go('database', 'connect');
         }) }, 'Make isolated'));
       }
     }
@@ -436,6 +488,7 @@
     $('#db-branch-target').textContent = `${schema}_dev`;
     $('#db-branch-msg').textContent = '';
     $('#db-branch-panel').classList.remove('hidden');
+    if (view !== 'settings') show('settings');
     $('#db-branch-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
   $('#db-branch-close').addEventListener('click', () => $('#db-branch-panel').classList.add('hidden'));
@@ -445,7 +498,7 @@
     try {
       const r = await api('/api/db/branch', { method: 'POST', body: { schema, withData: $('#db-branch-data').checked } });
       $('#db-branch-msg').textContent = branchSummary(r);
-      await views.projects();
+      await refreshOrgs();
     } catch (e) { $('#db-branch-msg').textContent = ''; err(e.message); }
     $('#db-branch-go').disabled = false;
   });
@@ -664,8 +717,7 @@
       : [el('tr', {}, el('td', { colspan: 3, class: 'muted' }, 'Uses the main Supabase services (see Services tab).'))]));
     $('#db-ov-advisors').replaceChildren(...(a.top.length ? [el('h3', {}, 'Top advisor findings'),
       ...a.top.map(x => el('p', { class: 'small' }, el('span', { class: `tag ${x.level === 'error' ? 'exited' : x.level === 'warn' ? 'warn' : ''}` }, x.level), ' ', x.title, ' ', el('span', { class: 'mono' }, x.object)))] : []));
-    $('#db-ov-panel').classList.remove('hidden');
-    $('#db-ov-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
   }
   $('#db-ov-close').addEventListener('click', () => { ovProject = null; $('#db-ov-panel').classList.add('hidden'); });
   $('#db-ov-refresh').addEventListener('click', () => ovProject && openOverview(ovProject).catch(e => err(e.message)));
@@ -686,8 +738,7 @@
     if (!c.url || !c.key) warns.push('Could not read the API URL or publishable key from the Supabase .env.');
     $('#db-connect-warn').replaceChildren(...warns.map(w => el('p', { class: 'warn-box small' }, w)));
     $('#db-connect-redirects').textContent = `Currently allowed: ${[c.siteUrl, ...c.redirects].filter(Boolean).join(', ') || 'none'}`;
-    $('#db-connect-panel').classList.remove('hidden');
-    $('#db-connect-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
   }
   $('#db-connect-close').addEventListener('click', () => $('#db-connect-panel').classList.add('hidden'));
 
@@ -719,9 +770,20 @@
   sqlInput.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); runSql(); } });
 
   loaders.database = async () => {
-    if (!orgCache.length) { try { orgCache = await api('/api/db/orgs'); renderContext(); } catch {} }
-    setCtx(ctx);
-    return show(view);
+    if (!orgCache.length) { try { await refreshOrgs(); } catch (e) { err(e.message); } }
+    if (!proj) {
+      let key = ''; try { key = localStorage.getItem('pc-proj') || ''; } catch {}
+      if (key) await selectProject(key);
+    }
+    return show(window.pcDbView || view);
   };
-  if (current === 'database') loaders.database();
+  // first paint: remember the last project, fill the switcher
+  (async () => {
+    try {
+      await refreshOrgs();
+      let key = ''; try { key = localStorage.getItem('pc-proj') || ''; } catch {}
+      if (key && !proj) await selectProject(key);
+    } catch {}
+    if (current === 'database' || current === 'home') loaders[current]();
+  })();
 })();

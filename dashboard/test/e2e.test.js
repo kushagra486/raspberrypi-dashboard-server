@@ -187,6 +187,16 @@ test('top-bar Terminal opens one shell in the home folder and reuses it', async 
   }
 });
 
+test('observability endpoints: logs, reports, metric history', async () => {
+  assert.strictEqual((await call('/api/logs?project=iso:nope')).status, 400);
+  const host = await call('/api/metrics/host');
+  assert.strictEqual(host.status, 200);
+  assert.ok(Array.isArray(await host.json()));
+  const l = await (await call('/api/logs?project=public&source=api&minutes=15')).json();
+  assert.ok(Array.isArray(l.sources) && l.sources.some(x => x.id === 'auth'));
+  assert.ok(Array.isArray(l.entries));   // empty here: no Docker in the test environment
+});
+
 test('logout ends the session', async () => {
   await call('/api/logout', { method: 'POST' });
   assert.strictEqual((await call('/api/system')).status, 401);
