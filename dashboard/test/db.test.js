@@ -1,5 +1,6 @@
 // Database section against a real local Postgres seeded like Supabase (auth, storage, app schemas).
 // Skipped unless PI_CONSOLE_TEST_DB=1 (needs the seeded server on 127.0.0.1:5432).
+// Seed it first: psql -d postgres -f test/seed.sql (needs pg_stat_statements in shared_preload_libraries).
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const { spawn } = require('node:child_process');
@@ -19,7 +20,7 @@ const json = async (p, opts) => { const r = await call(p, opts); return { status
 
 before(async () => {
   if (!enabled) return;
-  fs.writeFileSync(path.join(tmp, '.env'), 'PGRST_DB_SCHEMAS=public,graphql_public,janseva\nPOSTGRES_PASSWORD=test-db-pass\n');
+  fs.writeFileSync(path.join(tmp, '.env'), 'PGRST_DB_SCHEMAS=public,graphql_public,janseva,lab\nPOSTGRES_PASSWORD=test-db-pass\n');
   fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({
     bind: '127.0.0.1', port, projectRoots: [tmp], supabaseDir: tmp, disks: ['/'],
     dockerSocket: path.join(tmp, 'none.sock'), db: { host: '127.0.0.1', port: 5432 },
@@ -109,4 +110,44 @@ test('SQL editor caps results at 1000 rows', { skip: !enabled }, async () => {
 test('new project name is validated before any script runs', { skip: !enabled }, async () => {
   const r = await json('/api/db/projects', { method: 'POST', body: JSON.stringify({ name: 'Bad;Name' }) });
   assert.strictEqual(r.status, 502); assert.match(r.body.error, /lowercase/);
+});
+
+test('advisors: security and performance findings with fixes', { skip: !enabled }, async () => {
+  const { status, body } = await json('/api/db/advisors');
+  assert.strictEqual(status, 200);
+  const has = (name, object) => body.find(a => a.name === name && a.object === object);
+  assert.strictEqual(has('rls_disabled_in_exposed_schema', 'lab.open_table').level, 'error');
+  assert.strictEqual(has('policy_exists_rls_disabled', 'lab.forgot').level, 'error');
+  assert.ok(has('rls_enabled_no_policy', 'lab.locked'));
+  assert.ok(has('rls_disabled_private_schema', 'shop.orders'));        // shop is not exposed
+  assert.match(has('unindexed_foreign_key', 'lab.child').fix, /create index on "lab"\."child" \("?parent_id"?\)/);
+  assert.ok(has('no_primary_key', 'lab.nopk'));
+  assert.match(has('duplicate_index', 'lab.parent').fix, /drop index "lab"\."parent_name_b"/);
+  assert.ok(has('function_search_path_mutable', 'lab.add_one'));
+  assert.ok(!body.some(a => /^(auth|storage)\./.test(a.object)));  // platform schemas are not linted
+  assert.ok(!has('rls_disabled_in_exposed_schema', 'janseva.complaints'));
+  assert.strictEqual(body[0].level, 'error');                        // errors first
+});
+
+test('query insights from pg_stat_statements', { skip: !enabled }, async () => {
+  await json('/api/db/sql', { method: 'POST', body: JSON.stringify({ sql: 'select count(*) from janseva.complaints where title like $$%9%$$' }) });
+  const { status, body } = await json('/api/db/insights?sort=calls');
+  assert.strictEqual(status, 200);
+  assert.strictEqual(body.enabled, true); assert.strictEqual(body.sort, 'calls');
+  assert.ok(body.rows.length > 0 && body.rows.length <= 25);
+  assert.ok(body.rows.some(r => /janseva\.complaints/.test(r.query)));
+  assert.ok(!body.rows.some(r => /pg_stat_statements/.test(r.query)));
+  const all = await json('/api/db/insights?sort=total&limit=100');
+  assert.ok(!JSON.stringify(all.body).includes('test-db-pass'));   // seed's CREATE ROLE ... PASSWORD is redacted
+
+  const bad = await json('/api/db/insights?sort=drop%20table');
+  assert.strictEqual(bad.body.sort, 'total');                        // unknown sort falls back, never interpolated
+});
+
+test('passwords are masked in query text', () => {
+  const { redactSecrets } = require('../lib/db');
+  assert.strictEqual(redactSecrets("create role x login password 'it''s secret'"), "create role x login password '***'");
+  assert.strictEqual(redactSecrets('ALTER ROLE x WITH ENCRYPTED PASSWORD "abc"; select 1'), "ALTER ROLE x WITH ENCRYPTED PASSWORD '***'; select 1");
+  assert.strictEqual(redactSecrets('alter user x password $$p w$$'), "alter user x password '***'");
+  assert.strictEqual(redactSecrets('select encrypted_password from auth.users'), 'select encrypted_password from auth.users');
 });

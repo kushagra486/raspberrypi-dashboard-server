@@ -5,7 +5,7 @@ One dashboard for the Pi, in the browser, on any device.
 | Tab | What it does |
 |---|---|
 | **Overview** | CPU, memory, swap, temperature, disks (SD card and pendrive), uptime and load. Refreshes every 5 s. |
-| **Database** | Supabase Postgres at a glance: version, size, connections, auth users, storage, latest backup. **Projects** (one schema per app) with API exposure and **tables missing RLS flagged**; tables → columns, keys, policies, paged rows; **SQL editor** (read-only by default, 30 s timeout, 1000-row cap); auth users (no password hashes); storage buckets; *Create project* (runs `supabase/new-project.sh`). Full editing stays in Supabase Studio, linked. |
+| **Database** | Supabase Postgres at a glance: version, size, connections, auth users, storage, latest backup. **Projects** (one schema per app) with API exposure and **tables missing RLS flagged**; tables → columns, keys, policies, paged rows; **SQL editor** (read-only by default, 30 s timeout, 1000-row cap); auth users (no password hashes); storage buckets; *Create project* (runs `supabase/new-project.sh`); **Advisors** (RLS gaps, policies with RLS off, unindexed foreign keys, duplicate/unused indexes, missing primary keys, mutable function search_path, extensions in public; each with a fix you can open in the SQL editor); **Query insights** (slowest / most frequent queries from `pg_stat_statements`, passwords masked). Full editing stays in Supabase Studio, linked. |
 | **Claude** | Start a **Claude Code** (or plain shell) session in any project folder, see all running sessions, open any of them in a full terminal in the browser, end them. Also creates new project folders. |
 | **Services** | Every Docker container (Supabase and anything else): state, ports, start / stop / restart, last 300 log lines. |
 | **Apps** | One-click links to Supabase Studio, the API, and anything you add in `config.json`. |
@@ -58,4 +58,6 @@ only a scrypt hash is stored, in `dashboard/.env`, mode 600), and starts the
 ```bash
 npm install
 npm test        # boots the server and drives login, API, tmux sessions and the terminal socket
+# Database tests need a local Postgres with pg_stat_statements preloaded:
+psql -d postgres -f test/seed.sql && npm run test:db
 ```

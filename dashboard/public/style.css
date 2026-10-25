@@ -104,3 +104,17 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--muted);
 .pager { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
 .row label.check { flex: none; white-space: nowrap; }
 .row label.check input { flex: none; width: auto; }
+
+/* Advisors + query insights */
+.tag.warn { background: rgba(240, 180, 41, .15); color: var(--warn); }
+.badge { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 999px;
+  background: var(--bad); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
+.adv-filter { gap: 14px; align-items: center; margin-bottom: 10px; }
+.advisor { border: 1px solid var(--line); border-left-width: 3px; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+.advisor.level-error { border-left-color: var(--bad); }
+.advisor.level-warn { border-left-color: var(--warn); }
+.advisor.level-info { border-left-color: #4a6a8a; }
+.advisor p { margin: 6px 0; }
+.advisor-fix { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+.advisor-fix pre { flex: 1 1 260px; margin: 0; padding: 8px; background: #0d131b; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+.query-cell { min-width: 260px; max-width: 520px; white-space: pre-wrap; word-break: break-word; }

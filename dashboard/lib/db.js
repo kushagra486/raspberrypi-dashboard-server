@@ -34,6 +34,11 @@ function jsonSafe(v) {
   return v;
 }
 
+// pg_stat_statements keeps utility statements (CREATE/ALTER ROLE ... PASSWORD '...') verbatim.
+function redactSecrets(sql) {
+  return String(sql).replace(/(\b(?:encrypted\s+|unencrypted\s+)?password\s+)('(?:[^']|'')*'|"[^"]*"|\$\$.*?\$\$|\S+)/gis, "$1'***'");
+}
+
 class Database {
   constructor(cfg, docker) {
     this.cfg = cfg;
@@ -188,6 +193,137 @@ class Database {
       group by b.id, b.name, b.public order by b.name`);
   }
 
+  // ---- advisors (security + performance lints, after Supabase's splinter) ----
+
+  async advisors() {
+    const sys = [...SYSTEM_SCHEMAS];
+    const exposed = this.apiSchemas();
+    const app = `n.nspname not like 'pg\\_%' escape '\\' and n.nspname <> all($1::text[])`;
+    const ident = (s, t) => `${escapeIdentifier(s)}.${escapeIdentifier(t)}`;
+    const out = [];
+    const add = (level, category, name, title, object, detail, fix) =>
+      out.push({ level, category, name, title, object, detail, fix: fix || null });
+
+    const tables = await this.q(`
+      select n.nspname as schema, c.relname as name, c.relrowsecurity as rls,
+             (select count(*) from pg_policy p where p.polrelid = c.oid)::int as policies,
+             exists (select 1 from pg_constraint k where k.conrelid = c.oid and k.contype = 'p') as has_pk
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where c.relkind in ('r','p') and ${app}`, [sys]);
+    for (const t of tables) {
+      const obj = `${t.schema}.${t.name}`, id = ident(t.schema, t.name);
+      const isExposed = exposed.includes(t.schema);
+      if (!t.rls && t.policies > 0) {
+        add('error', 'security', 'policy_exists_rls_disabled', 'Policies exist but RLS is off', obj,
+          'The policies are ignored: anyone with the publishable key can read and write every row.',
+          `alter table ${id} enable row level security;`);
+      } else if (!t.rls && isExposed) {
+        add('error', 'security', 'rls_disabled_in_exposed_schema', 'RLS is off on an API-exposed table', obj,
+          'Anyone with the publishable key (it is public) can read, change and delete every row.',
+          `alter table ${id} enable row level security;\n-- then add policies, e.g.\n-- create policy "read own" on ${id} for select to authenticated using (auth.uid() = user_id);`);
+      } else if (!t.rls) {
+        add('info', 'security', 'rls_disabled_private_schema', 'RLS is off (schema not exposed yet)', obj,
+          'Safe while the schema stays private; becomes fully public the moment the schema is exposed.',
+          `alter table ${id} enable row level security;`);
+      } else if (t.policies === 0) {
+        add('info', 'security', 'rls_enabled_no_policy', 'RLS is on but there are no policies', obj,
+          'Nobody can read or write it through the API (only the secret key can). Fine if intended.',
+          `create policy "read" on ${id} for select to authenticated using (true);`);
+      }
+      if (!t.has_pk) {
+        add('info', 'performance', 'no_primary_key', 'Table has no primary key', obj,
+          'Rows cannot be updated or deleted reliably from Studio, and replication/realtime need a key.',
+          `alter table ${id} add column id bigint generated always as identity primary key;`);
+      }
+    }
+
+    for (const r of await this.q(`
+      select n.nspname as schema, c.relname as table, k.conname as fk,
+             (select string_agg(quote_ident(a.attname), ', ' order by u.ord)
+                from unnest(k.conkey) with ordinality u(attnum, ord)
+                join pg_attribute a on a.attrelid = k.conrelid and a.attnum = u.attnum) as cols
+      from pg_constraint k join pg_class c on c.oid = k.conrelid join pg_namespace n on n.oid = c.relnamespace
+      where k.contype = 'f' and ${app}
+        and not exists (select 1 from pg_index i where i.indrelid = k.conrelid
+                          and (i.indkey::text || ' ') like (array_to_string(k.conkey, ' ') || ' %'))`, [sys])) {
+      add('info', 'performance', 'unindexed_foreign_key', 'Foreign key without an index', `${r.schema}.${r.table}`,
+        `${r.fk} (${r.cols}): joins and deletes on the parent table scan this whole table.`,
+        `create index on ${ident(r.schema, r.table)} (${r.cols});`);
+    }
+
+    for (const r of await this.q(`
+      select n.nspname as schema, c.relname as table, array_agg(ic.relname::text order by ic.relname) as indexes
+      from pg_index i join pg_class ic on ic.oid = i.indexrelid
+      join pg_class c on c.oid = i.indrelid join pg_namespace n on n.oid = c.relnamespace
+      where ${app}
+      group by n.nspname, c.relname, i.indkey::text, i.indclass::text,
+               coalesce(pg_get_expr(i.indexprs, i.indrelid), ''), coalesce(pg_get_expr(i.indpred, i.indrelid), '')
+      having count(*) > 1`, [sys])) {
+      add('warn', 'performance', 'duplicate_index', 'Duplicate indexes', `${r.schema}.${r.table}`,
+        `${r.indexes.join(', ')} are identical: every write updates both, reads use one.`,
+        r.indexes.slice(1).map(x => `drop index ${ident(r.schema, x)};`).join('\n'));
+    }
+
+    for (const r of await this.q(`
+      select s.schemaname as schema, s.relname as table, s.indexrelname as index,
+             pg_relation_size(s.indexrelid)::text as size
+      from pg_stat_user_indexes s join pg_index i on i.indexrelid = s.indexrelid
+      join pg_namespace n on n.nspname = s.schemaname
+      where s.idx_scan = 0 and not i.indisunique and not i.indisprimary and ${app}`, [sys])) {
+      add('info', 'performance', 'unused_index', 'Index never used (since stats were last reset)', `${r.schema}.${r.table}`,
+        `${r.index} has not been used by any query; it still costs disk and slows writes.`,
+        `drop index ${ident(r.schema, r.index)};`);
+    }
+
+    for (const r of await this.q(`
+      select n.nspname as schema, p.proname as name, pg_get_function_identity_arguments(p.oid) as args
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where ${app} and p.prokind in ('f','p')
+        and not exists (select 1 from unnest(coalesce(p.proconfig, '{}')) c where c like 'search_path=%')
+        and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')`, [sys])) {
+      add('warn', 'security', 'function_search_path_mutable', 'Function has a mutable search_path', `${r.schema}.${r.name}`,
+        'A caller can change search_path and make it run their objects instead of yours.',
+        `alter function ${ident(r.schema, r.name)}(${r.args}) set search_path = '';`);
+    }
+
+    for (const r of await this.q(`
+      select e.extname from pg_extension e join pg_namespace n on n.oid = e.extnamespace where n.nspname = 'public'`)) {
+      add('warn', 'security', 'extension_in_public', 'Extension installed in public', `public (${r.extname})`,
+        'Its functions become part of the public API surface; Supabase keeps extensions in the "extensions" schema.',
+        `alter extension ${escapeIdentifier(r.extname)} set schema extensions;`);
+    }
+
+    const rank = { error: 0, warn: 1, info: 2 };
+    return out.sort((a, b) => rank[a.level] - rank[b.level] || a.object.localeCompare(b.object));
+  }
+
+  // ---- query insights (pg_stat_statements) -----------------------------------
+
+  async insights({ sort = 'total', limit = 25 } = {}) {
+    const ext = await this.q(`select n.nspname as schema from pg_extension e
+      join pg_namespace n on n.oid = e.extnamespace where e.extname = 'pg_stat_statements'`);
+    if (!ext.length) {
+      return { enabled: false, hint: 'Run: create extension pg_stat_statements with schema extensions;' };
+    }
+    const columns = { total: 'total_exec_time', mean: 'mean_exec_time', calls: 'calls', rows: 'rows' };
+    if (!columns[sort]) sort = 'total';
+    const order = columns[sort];
+    const lim = Math.min(Math.max(Number(limit) || 25, 1), 100);
+    const v = `${escapeIdentifier(ext[0].schema)}.pg_stat_statements`;
+    const rows = await this.q(`
+      select left(s.query, 2000) as query, r.rolname as role, s.calls::text as calls,
+             round(s.total_exec_time::numeric, 1)::text as total_ms,
+             round(s.mean_exec_time::numeric, 2)::text as mean_ms,
+             s.rows::text as rows,
+             round((100 * s.total_exec_time / nullif(sum(s.total_exec_time) over (), 0))::numeric, 1)::text as share
+      from ${v} s left join pg_roles r on r.oid = s.userid
+      where s.dbid = (select oid from pg_database where datname = current_database())
+        and s.query not ilike '%pg_stat_statements%'
+      order by s.${order} desc limit ${lim}`);
+    const [info] = await this.q(`select (select count(*) from ${v})::int as statements`);
+    return { enabled: true, sort, statements: info.statements, rows: rows.map(r => ({ ...r, query: redactSecrets(r.query) })) };
+  }
+
   // ---- SQL editor -----------------------------------------------------------
 
   // Read-only runs inside a READ ONLY transaction that is always rolled back.
@@ -238,4 +374,4 @@ class Database {
   }
 }
 
-module.exports = { Database, SYSTEM_SCHEMAS };
+module.exports = { Database, SYSTEM_SCHEMAS, redactSecrets };

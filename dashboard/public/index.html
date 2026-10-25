@@ -69,6 +69,8 @@
         <button data-db="sql">SQL editor</button>
         <button data-db="users">Auth users</button>
         <button data-db="storage">Storage</button>
+        <button data-db="advisors">Advisors <span id="db-adv-badge" class="badge hidden"></span></button>
+        <button data-db="insights">Query insights</button>
         <a id="db-studio" class="ghost-link" target="_blank" rel="noopener">Open Studio ↗</a>
       </nav>
       <p id="db-error" class="error" role="alert"></p>
@@ -125,6 +127,38 @@
         <div class="panel"><h2>Storage buckets</h2>
           <table class="list"><thead><tr><th>Bucket</th><th>Public</th><th>Objects</th><th>Size</th></tr></thead>
             <tbody id="db-bucket-list"></tbody></table></div>
+      </div>
+
+      <div id="db-advisors" class="db-view">
+        <div class="panel">
+          <h2>Advisors <span class="muted small">security and performance checks of your app schemas</span>
+            <button id="adv-refresh" class="ghost small">Re-check</button></h2>
+          <div class="row adv-filter">
+            <label class="check"><input type="radio" name="adv-cat" value="all" checked> All</label>
+            <label class="check"><input type="radio" name="adv-cat" value="security"> Security</label>
+            <label class="check"><input type="radio" name="adv-cat" value="performance"> Performance</label>
+            <span id="adv-summary" class="muted small"></span>
+          </div>
+          <div id="adv-list"></div>
+        </div>
+      </div>
+
+      <div id="db-insights" class="db-view">
+        <div class="panel">
+          <h2>Query insights <span class="muted small">from pg_stat_statements, since stats were last reset</span></h2>
+          <div class="row">
+            <label class="muted small" for="ins-sort">Sort by</label>
+            <select id="ins-sort">
+              <option value="total">Total time</option><option value="mean">Slowest (avg)</option>
+              <option value="calls">Most calls</option><option value="rows">Most rows</option>
+            </select>
+            <button id="ins-refresh" class="ghost small">Refresh</button>
+            <span id="ins-meta" class="muted small"></span>
+          </div>
+          <div class="scroll"><table class="list">
+            <thead><tr><th>Query</th><th>Role</th><th>Calls</th><th>Total ms</th><th>Avg ms</th><th>Rows</th><th>% time</th></tr></thead>
+            <tbody id="ins-list"></tbody></table></div>
+        </div>
       </div>
     </section>
 

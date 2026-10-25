@@ -76,6 +76,27 @@
         : [el('tr', {}, el('td', { colspan: 5, class: 'muted' }, 'No users yet.'))]));
     },
 
+    async advisors() {
+      advisorData = await api('/api/db/advisors');
+      renderAdvisors();
+    },
+
+    async insights() {
+      const d = await api(`/api/db/insights?sort=${encodeURIComponent($('#ins-sort').value)}`);
+      if (!d.enabled) {
+        $('#ins-meta').textContent = '';
+        $('#ins-list').replaceChildren(el('tr', {}, el('td', { colspan: 7, class: 'muted' },
+          'pg_stat_statements is not enabled. ', el('code', {}, d.hint))));
+        return;
+      }
+      $('#ins-meta').textContent = `${d.statements} distinct statements tracked`;
+      $('#ins-list').replaceChildren(...(d.rows.length ? d.rows.map(r => el('tr', {},
+        el('td', { class: 'mono small query-cell', title: r.query }, r.query.length > 220 ? r.query.slice(0, 220) + '…' : r.query),
+        el('td', { class: 'small' }, r.role || ''), el('td', {}, r.calls), el('td', {}, r.total_ms),
+        el('td', {}, r.mean_ms), el('td', {}, r.rows), el('td', {}, (r.share ?? '0') + '%')))
+        : [el('tr', {}, el('td', { colspan: 7, class: 'muted' }, 'No queries recorded yet.'))]));
+    },
+
     async storage() {
       const b = await api('/api/db/buckets');
       $('#db-bucket-list').replaceChildren(...(b.length ? b.map(x => el('tr', {},
@@ -84,6 +105,37 @@
         : [el('tr', {}, el('td', { colspan: 4, class: 'muted' }, 'No buckets yet.'))]));
     },
   };
+
+  // ---- advisors rendering
+  let advisorData = [];
+  const levelTag = { error: 'exited', warn: 'warn', info: '' };
+  function renderAdvisors() {
+    const cat = (document.querySelector('input[name="adv-cat"]:checked') || {}).value || 'all';
+    const list = advisorData.filter(a => cat === 'all' || a.category === cat);
+    const n = l => advisorData.filter(a => a.level === l).length;
+    $('#adv-summary').textContent = `${n('error')} errors · ${n('warn')} warnings · ${n('info')} suggestions`;
+    const badge = $('#db-adv-badge');
+    badge.textContent = String(n('error'));
+    badge.classList.toggle('hidden', n('error') === 0);
+    $('#adv-list').replaceChildren(...(list.length ? list.map(a => el('div', { class: `advisor level-${a.level}` },
+      el('div', { class: 'advisor-head' },
+        el('span', { class: `tag ${levelTag[a.level]}` }, a.level), ' ',
+        el('span', { class: 'tag' }, a.category), ' ',
+        el('b', {}, a.title), ' ', el('span', { class: 'mono small' }, a.object)),
+      el('p', { class: 'muted small' }, a.detail),
+      a.fix ? el('div', { class: 'advisor-fix' },
+        el('pre', { class: 'mono small' }, a.fix),
+        el('button', { class: 'ghost small', onclick: () => useInEditor(a.fix) }, 'Open in SQL editor')) : ''))
+      : [el('p', { class: 'muted' }, advisorData.length ? 'Nothing in this category.' : 'No issues found. 🎉')]));
+  }
+  function useInEditor(sql) {
+    $('#sql-input').value = `-- from Advisors: review, untick read-only, then run\n${sql}\n`;
+    show('sql');
+  }
+  document.querySelectorAll('input[name="adv-cat"]').forEach(r => r.addEventListener('change', renderAdvisors));
+  $('#adv-refresh').addEventListener('click', () => views.advisors().catch(e => err(e.message)));
+  $('#ins-sort').addEventListener('change', () => views.insights().catch(e => err(e.message)));
+  $('#ins-refresh').addEventListener('click', () => views.insights().catch(e => err(e.message)));
 
   async function openSchema(schema, keepTable) {
     cur.schema = schema;

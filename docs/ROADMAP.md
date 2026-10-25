@@ -56,8 +56,8 @@ service they change.
 
 | # | Feature | Borrowed from |
 |---|---|---|
-| B1 | **Advisors**: RLS off, tables without policies, missing FK indexes, unused indexes, exposed schemas | Supabase Advisors (splinter lints) |
-| B2 | **Query insights**: slowest / most frequent queries | Neon, PlanetScale Insights |
+| B1 ✅ | **Advisors**: RLS off, tables without policies, missing FK indexes, unused indexes, exposed schemas | Supabase Advisors (splinter lints) |
+| B2 ✅ | **Query insights**: slowest / most frequent queries | Neon, PlanetScale Insights |
 | B3 | **Table editor**: inline edit, insert row, CSV import/export | Supabase / Airtable / PocketBase |
 | B4 | **Branch an app**: copy schema (+ optional data) to `app_dev`, reset, delete | Neon branching, Supabase branching |
 | B5 | **Connect to Vercel**: one click shows/copies the env block for an app (URL, publishable key, schema) | Vercel / Supabase "Connect" |

@@ -129,6 +129,10 @@ async function api(req, res, url) {
       }
       if (route === 'GET /api/db/users') return send(res, 200, await database.authUsers());
       if (route === 'GET /api/db/buckets') return send(res, 200, await database.buckets());
+      if (route === 'GET /api/db/advisors') return send(res, 200, await database.advisors());
+      if (route === 'GET /api/db/insights') {
+        return send(res, 200, await database.insights({ sort: url.searchParams.get('sort') || 'total', limit: url.searchParams.get('limit') }));
+      }
       if (route === 'POST /api/db/sql') {
         const { sql, readOnly } = await readJson(req, 200 * 1024);
         return send(res, 200, await database.run(sql, { readOnly: readOnly !== false }));
