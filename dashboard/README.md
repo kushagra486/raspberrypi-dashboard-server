@@ -19,7 +19,7 @@ Supabase UI (tables, SQL editor, auth, storage), and a copy would cost RAM the P
 
 ## Install it as an app
 
-Open `https://raspberrypi.tailc40262.ts.net:8443` (Tailscale Serve: HTTPS, tailnet-only) and choose
+Open `https://raspberrypi.tailc40262.ts.net:9443` (Tailscale Serve: HTTPS, tailnet-only) and choose
 **Install app** (Chrome/Edge) or **Share → Add to Home Screen** (iPhone). It opens in its own
 window with its own icon, on any device signed in to Tailscale.
 
