@@ -141,3 +141,12 @@ button.danger { color: var(--bad); border-color: rgba(242, 95, 92, .4); }
 .snippet-bar { gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
 .snippet-bar select { min-width: 200px; }
 details.panel > summary { cursor: pointer; }
+
+/* Organizations */
+.org { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; margin: 12px 0; }
+.org-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.org-head h3 { margin: 0; }
+.org-actions > * { margin-left: 4px; }
+.org-new-project { gap: 8px; margin: 8px 0; }
+.org-new-project input { flex: 1 1 180px; }
+select.small { padding: 3px 6px; font-size: 13px; }

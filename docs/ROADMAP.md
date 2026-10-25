@@ -69,6 +69,13 @@ service they change.
 | B11 | **Audit log** of Pi Console actions (who ran what SQL / restarted what) | Supabase audit logs, GitHub |
 | B12 | **Auth admin**: invite, ban, reset password, auth settings per app | Supabase Auth, Clerk |
 
+## Organizations and projects (owner request 2026-10-25)
+
+| # | What | Status |
+|---|---|---|
+| O1 | Organizations as folders of projects (project = schema; shared URL, key and sign-up users) | ✅ built |
+| O2 | Optional **separate sign-up users** per project: own Auth + REST pair (~100 MB each, 3-5 max) with its **own JWT secret** (a shared secret would let users of one project into another), routed at `/p/<project>/auth/v1` and `/p/<project>/rest/v1`; Storage and Realtime stay shared | design + RAM measurement on the Pi first, then owner check-in |
+
 ## C. Bigger pieces (cost RAM or need decisions)
 
 | # | What | Note |

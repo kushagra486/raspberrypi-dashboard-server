@@ -145,6 +145,11 @@ async function api(req, res, url) {
       }
       if (route === 'GET /api/db/users') return send(res, 200, await database.authUsers());
       if (route === 'GET /api/db/buckets') return send(res, 200, await database.buckets());
+      if (route === 'GET /api/db/orgs') return send(res, 200, await database.orgs());
+      if (route === 'POST /api/db/orgs') return send(res, 201, await database.createOrg((await readJson(req)).name));
+      if (route === 'PATCH /api/db/orgs') { const b = await readJson(req); return send(res, 200, await database.renameOrg(b.id, b.name)); }
+      if (route === 'DELETE /api/db/orgs') return send(res, 200, await database.deleteOrg(url.searchParams.get('id')));
+      if (route === 'POST /api/db/projects/move') { const b = await readJson(req); return send(res, 200, await database.moveProject(b.schema, b.orgId)); }
       if (route === 'GET /api/db/diagram') return send(res, 200, await database.diagram(url.searchParams.get('schema') || ''));
       if (route === 'GET /api/db/migrations') return send(res, 200, await database.migrations());
       if (route === 'POST /api/db/branch') {
@@ -176,8 +181,8 @@ async function api(req, res, url) {
         return send(res, 200, await database.run(sql, { readOnly: readOnly !== false }));
       }
       if (route === 'POST /api/db/projects') {
-        const { name } = await readJson(req);
-        return send(res, 201, await database.createProject(name));
+        const { name, orgId } = await readJson(req);
+        return send(res, 201, await database.createProject(name, orgId ?? null));
       }
     } catch (e) {
       return send(res, e.sql ? 400 : 502, { error: e.message });

@@ -11,7 +11,7 @@ do $$ begin
   if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;
 end $$;
 
-drop schema if exists auth, storage, janseva, shop, lab, blog, blog_dev, extensions cascade;
+drop schema if exists auth, storage, janseva, shop, lab, blog, blog_dev, acme_store, pi_console, extensions cascade;
 drop table if exists public.notes;
 
 create schema extensions;

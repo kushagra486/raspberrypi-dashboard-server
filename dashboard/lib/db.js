@@ -12,6 +12,7 @@ const SYSTEM_SCHEMAS = new Set([
   'pg_catalog', 'information_schema', 'pg_toast', 'auth', 'storage', 'realtime', '_realtime',
   'supabase_functions', 'supabase_migrations', 'extensions', 'graphql', 'graphql_public', 'vault',
   'pgsodium', 'pgsodium_masks', 'net', 'cron', '_analytics', 'pgbouncer', 'pgtle', '_supavisor',
+  'pi_console',   // Pi Console's own metadata (organizations), never exposed
 ]);
 const ROW_LIMIT = 1000;
 
@@ -682,20 +683,99 @@ class Database {
     }
   }
 
+  // ---- organizations (folders of projects) ----------------------------------
+  // Stored in the database (schema pi_console) so the nightly backups include them.
+  // A project is an app schema; schemas not assigned yet belong to the default organization.
+
+  async ensureMeta() {
+    if (this.metaReady) return;
+    await this.tx(async c => {
+      await c.query(`create schema if not exists pi_console`);
+      await c.query(`revoke all on schema pi_console from public`);
+      await c.query(`create table if not exists pi_console.orgs (
+        id serial primary key, name text not null unique check (length(name) between 1 and 60),
+        is_default boolean not null default false, created_at timestamptz not null default now())`);
+      await c.query(`create table if not exists pi_console.projects (
+        schema text primary key, org_id int not null references pi_console.orgs(id),
+        created_at timestamptz not null default now())`);
+      await c.query(`insert into pi_console.orgs (name, is_default)
+        select 'Personal', true where not exists (select 1 from pi_console.orgs where is_default)`);
+    });
+    this.metaReady = true;
+  }
+
+  async orgs() {
+    await this.ensureMeta();
+    const orgs = await this.q(`select id, name, is_default, created_at from pi_console.orgs order by is_default desc, name`);
+    const assigned = new Map((await this.q(`select schema, org_id from pi_console.projects`)).map(r => [r.schema, r.org_id]));
+    const def = orgs.find(o => o.is_default).id;
+    const projects = await this.projects();
+    // a branch (x_dev) sits with its source project
+    const orgOf = s => assigned.get(s) ?? (s.endsWith('_dev') ? assigned.get(s.slice(0, -4)) : undefined) ?? def;
+    return orgs.map(o => ({ ...o, created_at: jsonSafe(o.created_at), projects: projects.filter(p => orgOf(p.schema) === o.id) }));
+  }
+
+  async createOrg(name) {
+    await this.ensureMeta();
+    name = String(name || '').trim();
+    if (!name || name.length > 60) throw sqlError('Organization name: 1-60 characters');
+    try { return (await this.q(`insert into pi_console.orgs (name) values ($1) returning id, name`, [name]))[0]; }
+    catch (e) { throw sqlError(e.code === '23505' ? `An organization called "${name}" already exists` : e.message); }
+  }
+
+  async renameOrg(id, name) {
+    await this.ensureMeta();
+    name = String(name || '').trim();
+    if (!name || name.length > 60) throw sqlError('Organization name: 1-60 characters');
+    try {
+      const r = await this.q(`update pi_console.orgs set name = $2 where id = $1 returning id, name`, [Number(id), name]);
+      if (!r.length) throw sqlError('No such organization');
+      return r[0];
+    } catch (e) { if (e.sql) throw e; throw sqlError(e.code === '23505' ? `An organization called "${name}" already exists` : e.message); }
+  }
+
+  async deleteOrg(id) {
+    const org = (await this.orgs()).find(o => o.id === Number(id));
+    if (!org) throw sqlError('No such organization');
+    if (org.is_default) throw sqlError('The default organization cannot be deleted');
+    if (org.projects.length) throw sqlError(`Move or delete its ${org.projects.length} project(s) first`);
+    await this.q(`delete from pi_console.projects where org_id = $1`, [org.id]);
+    await this.q(`delete from pi_console.orgs where id = $1`, [org.id]);
+    return { deleted: org.name };
+  }
+
+  async moveProject(schema, orgId) {
+    await this.ensureMeta();
+    await this.appSchemaOrThrow(schema);
+    if (schema.endsWith('_dev')) throw sqlError('Branches move together with their project');
+    const org = (await this.q(`select id from pi_console.orgs where id = $1`, [Number(orgId)]))[0];
+    if (!org) throw sqlError('No such organization');
+    await this.q(`insert into pi_console.projects (schema, org_id) values ($1, $2)
+      on conflict (schema) do update set org_id = excluded.org_id`, [schema, org.id]);
+    return { schema, orgId: org.id };
+  }
+
   // ---- new app schema -------------------------------------------------------
 
-  createProject(name) {
+  async createProject(name, orgId) {
     if (!/^[a-z][a-z0-9_]{1,30}$/.test(name || '')) {
-      return Promise.reject(new Error('Name: lowercase letters, digits, underscores; 2-31 chars; starts with a letter.'));
+      throw new Error('Name: lowercase letters, digits, underscores; 2-31 chars; starts with a letter.');
     }
-    return new Promise((resolve, reject) => {
+    if (name.endsWith('_dev')) throw new Error('Names ending in _dev are reserved for branches');
+    if (orgId != null) {
+      await this.ensureMeta();
+      if (!(await this.q(`select 1 from pi_console.orgs where id = $1`, [Number(orgId)])).length) throw new Error('No such organization');
+    }
+    const out = await new Promise((resolve, reject) => {
       execFile(this.cfg.newProjectScript, [name], {
         timeout: 120000, env: { ...process.env, PROJECT_DIR: this.cfg.supabaseDir },
       }, (err, stdout, stderr) => {
         if (err) return reject(new Error((stderr || stdout || err.message).trim().split('\n').pop()));
-        resolve({ name, output: stdout.trim() });
+        resolve(stdout.trim());
       });
     });
+    if (orgId != null) await this.moveProject(name, orgId);
+    return { name, orgId: orgId ?? null, output: out };
   }
 }
 

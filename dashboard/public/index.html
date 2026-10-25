@@ -79,13 +79,13 @@
 
       <div id="db-projects" class="db-view">
         <div class="panel">
-          <h2>Projects <span class="muted small">one schema per app</span></h2>
-          <form id="db-new-project" class="row">
-            <input id="db-new-name" placeholder="new app schema, e.g. janseva" pattern="[a-z][a-z0-9_]{1,30}" required>
-            <button type="submit">Create project</button>
+          <h2>Organizations &amp; projects
+            <span class="muted small">a project = its own schema; all projects share one API URL, key and sign-up users</span></h2>
+          <form id="db-new-org" class="row">
+            <input id="db-new-org-name" placeholder="new organization, e.g. Client Acme" maxlength="60" required>
+            <button type="submit" class="ghost">New organization</button>
           </form>
-          <table class="list"><thead><tr><th>Schema</th><th>Tables</th><th>Size</th><th>API</th><th>RLS</th><th></th></tr></thead>
-            <tbody id="db-project-list"></tbody></table>
+          <div id="db-orgs"></div>
         </div>
         <div class="panel hidden" id="db-branch-panel">
           <h2>Branch <span id="db-branch-name" class="mono"></span> <button id="db-branch-close" class="ghost small">Close</button></h2>

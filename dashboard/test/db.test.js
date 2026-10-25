@@ -22,10 +22,13 @@ before(async () => {
   if (!enabled) return;
   fs.writeFileSync(path.join(tmp, '.env'), 'PGRST_DB_SCHEMAS=public,graphql_public,janseva,lab\nPOSTGRES_PASSWORD=test-db-pass\nSUPABASE_PUBLIC_URL=https://pi.example\nSUPABASE_PUBLISHABLE_KEY=sb_publishable_test\nSUPABASE_SECRET_KEY=sb_secret_test\n');
   fs.writeFileSync(path.join(tmp, 'expose.sh'), `#!/bin/sh\necho "$1 $2" >> ${path.join(tmp, 'expose.log')}\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(tmp, 'new-project.sh'),
+    '#!/bin/sh\nPGPASSWORD=test-db-pass psql -q -h 127.0.0.1 -U supabase_admin -d postgres -c "create schema if not exists $1" && echo "created $1"\n', { mode: 0o755 });
   fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({
     bind: '127.0.0.1', port, projectRoots: [tmp], supabaseDir: tmp, disks: ['/'],
     dockerSocket: path.join(tmp, 'none.sock'), db: { host: '127.0.0.1', port: 5432 },
     exposeSchemaScript: path.join(tmp, 'expose.sh'), dataDir: path.join(tmp, 'data'),
+    newProjectScript: path.join(tmp, 'new-project.sh'),
   }));
   proc = spawn(process.execPath, ['server.js'], {
     cwd: path.join(__dirname, '..'),
@@ -275,4 +278,37 @@ test('saved SQL snippets persist on the server', { skip: !enabled }, async () =>
   assert.strictEqual((await json('/api/snippets?name=a%20first', { method: 'DELETE' })).status, 200);
   assert.strictEqual((await json('/api/snippets?name=nope', { method: 'DELETE' })).status, 404);
   assert.strictEqual((await json('/api/db/migrations')).body.length, 0);   // no supabase_migrations schema in the seed
+});
+
+test('organizations: default org holds existing projects; create, move, rename, delete', { skip: !enabled }, async () => {
+  const orgs = async () => (await json('/api/db/orgs')).body;
+  let list = await orgs();
+  assert.strictEqual(list.length, 1); assert.strictEqual(list[0].name, 'Personal'); assert.strictEqual(list[0].is_default, true);
+  assert.ok(['janseva', 'shop', 'blog'].every(s => list[0].projects.some(p => p.schema === s)));
+  assert.ok(!list[0].projects.some(p => p.schema === 'pi_console'));          // metadata schema stays hidden
+  const acme = await json('/api/db/orgs', { method: 'POST', body: JSON.stringify({ name: 'Client Acme' }) });
+  assert.strictEqual(acme.status, 201);
+  assert.strictEqual((await json('/api/db/orgs', { method: 'POST', body: JSON.stringify({ name: 'Client Acme' }) })).status, 400);
+  // new project directly inside the new org
+  const np = await json('/api/db/projects', { method: 'POST', body: JSON.stringify({ name: 'acme_store', orgId: acme.body.id }) });
+  assert.strictEqual(np.status, 201, JSON.stringify(np.body));
+  assert.strictEqual((await json('/api/db/projects', { method: 'POST', body: JSON.stringify({ name: 'x_dev' }) })).status, 502);
+  // move blog there; its branch follows
+  await json('/api/db/branch', { method: 'POST', body: JSON.stringify({ schema: 'blog' }) });
+  assert.strictEqual((await json('/api/db/projects/move', { method: 'POST', body: JSON.stringify({ schema: 'blog', orgId: acme.body.id }) })).status, 200);
+  assert.strictEqual((await json('/api/db/projects/move', { method: 'POST', body: JSON.stringify({ schema: 'blog_dev', orgId: acme.body.id }) })).status, 400);
+  list = await orgs();
+  const a = list.find(o => o.name === 'Client Acme');
+  assert.deepStrictEqual(a.projects.map(p => p.schema).sort(), ['acme_store', 'blog', 'blog_dev']);
+  assert.ok(!list[0].projects.some(p => p.schema === 'blog'));
+  // rename; delete refused while it has projects; default org is never deletable
+  assert.strictEqual((await json('/api/db/orgs', { method: 'PATCH', body: JSON.stringify({ id: a.id, name: 'Acme Ltd' }) })).body.name, 'Acme Ltd');
+  assert.match((await json(`/api/db/orgs?id=${a.id}`, { method: 'DELETE' })).body.error, /Move or delete/);
+  assert.match((await json(`/api/db/orgs?id=${list[0].id}`, { method: 'DELETE' })).body.error, /default/);
+  // empty it, then delete
+  await json('/api/db/branch?schema=blog_dev', { method: 'DELETE' });
+  for (const s of ['blog', 'acme_store']) await json('/api/db/projects/move', { method: 'POST', body: JSON.stringify({ schema: s, orgId: list[0].id }) });
+  assert.strictEqual((await json(`/api/db/orgs?id=${a.id}`, { method: 'DELETE' })).status, 200);
+  assert.strictEqual((await orgs()).length, 1);
+  await json('/api/db/sql', { method: 'POST', body: JSON.stringify({ sql: 'drop schema acme_store; delete from pi_console.projects', readOnly: false }) });
 });

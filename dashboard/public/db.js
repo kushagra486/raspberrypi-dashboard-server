@@ -52,16 +52,9 @@
     },
 
     async projects() {
-      const list = await api('/api/db/projects');
-      $('#db-project-list').replaceChildren(...list.map(p => el('tr', { class: 'clickable', onclick: () => openSchema(p.schema) },
-        el('td', {}, el('b', {}, p.schema)),
-        el('td', {}, String(p.tables)),
-        el('td', {}, fmtBytes(Number(p.size))),
-        el('td', {}, p.api ? el('span', { class: 'tag running' }, 'exposed') : el('span', { class: 'tag' }, 'private')),
-        el('td', {}, p.tables_without_rls
-          ? el('span', { class: 'tag exited', title: 'Tables without row level security are readable/writable with the public key if exposed' }, `${p.tables_without_rls} without RLS`)
-          : el('span', { class: 'tag running' }, p.tables ? 'all on' : '–')),
-        el('td', { class: 'row-actions' }, ...projectActions(p)))));
+      const orgs = await api('/api/db/orgs');
+      orgCache = orgs;
+      $('#db-orgs').replaceChildren(...orgs.map(renderOrg));
       if (cur.schema) await openSchema(cur.schema, true);
     },
 
@@ -253,6 +246,68 @@
     } catch (e2) { err(e2.message); }
   });
 
+  // ---- organizations
+  let orgCache = [];
+  function renderOrg(o) {
+    const form = el('form', { class: 'row org-new-project' },
+      el('input', { placeholder: 'new project, e.g. myshop', pattern: '[a-z][a-z0-9_]{1,30}', required: '', 'aria-label': `New project in ${o.name}` }),
+      el('button', { type: 'submit', class: 'small' }, '+ New project'));
+    form.addEventListener('submit', async e => {
+      e.preventDefault(); err('');
+      const name = form.querySelector('input').value;
+      if (!confirm(`Create project "${name}" in ${o.name}? It gets its own schema, exposed through the API (the REST service restarts for a few seconds).`)) return;
+      try {
+        await api('/api/db/projects', { method: 'POST', body: { name, orgId: o.id } });
+        await views.projects(); await openSchema(name);
+      } catch (e2) { err(e2.message); }
+    });
+    const head = el('div', { class: 'org-head' },
+      el('h3', {}, o.name, ' ', o.is_default ? el('span', { class: 'tag' }, 'default') : '', ' ',
+        el('span', { class: 'muted small' }, `${o.projects.length} project${o.projects.length === 1 ? '' : 's'}`)),
+      el('span', { class: 'org-actions' },
+        el('button', { class: 'ghost small', onclick: async () => {
+          const name = prompt('Rename organization:', o.name);
+          if (!name || name === o.name) return;
+          try { await api('/api/db/orgs', { method: 'PATCH', body: { id: o.id, name } }); await views.projects(); } catch (e) { err(e.message); }
+        } }, 'Rename'),
+        o.is_default ? '' : el('button', { class: 'ghost small danger', onclick: async () => {
+          if (!confirm(`Delete the organization "${o.name}"? Only empty organizations can be deleted; no data is touched.`)) return;
+          try { await api(`/api/db/orgs?id=${o.id}`, { method: 'DELETE' }); await views.projects(); } catch (e) { err(e.message); }
+        } }, 'Delete')));
+    const rows = o.projects.length ? o.projects.map(p => el('tr', { class: 'clickable', onclick: () => openSchema(p.schema) },
+      el('td', {}, el('b', {}, p.schema), p.schema.endsWith('_dev') ? el('span', { class: 'tag' }, 'branch') : ''),
+      el('td', {}, String(p.tables)),
+      el('td', {}, fmtBytes(Number(p.size))),
+      el('td', {}, p.api ? el('span', { class: 'tag running' }, 'exposed') : el('span', { class: 'tag' }, 'private')),
+      el('td', {}, p.tables_without_rls
+        ? el('span', { class: 'tag exited', title: 'Tables without row level security are readable/writable with the public key if exposed' }, `${p.tables_without_rls} without RLS`)
+        : el('span', { class: 'tag running' }, p.tables ? 'all on' : '–')),
+      el('td', { class: 'row-actions' }, ...projectActions(p), moveSelect(p, o))))
+      : [el('tr', {}, el('td', { colspan: 6, class: 'muted' }, 'No projects yet.'))];
+    return el('div', { class: 'org' }, head, form,
+      el('div', { class: 'scroll' }, el('table', { class: 'list' },
+        el('thead', {}, el('tr', {}, ...['Project', 'Tables', 'Size', 'API', 'RLS', ''].map(h => el('th', {}, h)))),
+        el('tbody', { 'data-org': String(o.id) }, ...rows))));
+  }
+  function moveSelect(p, o) {
+    if (p.schema === 'public' || p.schema.endsWith('_dev') || orgCache.length < 2) return '';
+    const sel = el('select', { class: 'small', title: 'Move to organization', 'aria-label': `Move ${p.schema}` },
+      el('option', { value: '' }, 'Move to…'),
+      ...orgCache.filter(x => x.id !== o.id).map(x => el('option', { value: String(x.id) }, x.name)));
+    sel.addEventListener('click', ev => ev.stopPropagation());
+    sel.addEventListener('change', async () => {
+      if (!sel.value) return;
+      try { await api('/api/db/projects/move', { method: 'POST', body: { schema: p.schema, orgId: Number(sel.value) } }); await views.projects(); }
+      catch (e) { err(e.message); }
+    });
+    return sel;
+  }
+  $('#db-new-org').addEventListener('submit', async e => {
+    e.preventDefault(); err('');
+    try { await api('/api/db/orgs', { method: 'POST', body: { name: $('#db-new-org-name').value } }); $('#db-new-org-name').value = ''; await views.projects(); }
+    catch (e2) { err(e2.message); }
+  });
+
   // ---- project actions: connect, branch, reset / delete branch
   const stop = fn => ev => { ev.stopPropagation(); fn().catch(e => err(e.message)); };
   function projectActions(p) {
@@ -432,18 +487,6 @@
   $('#db-prev').addEventListener('click', () => openTable(cur.schema, cur.table, Math.max(cur.offset - cur.limit, 0)).catch(e => err(e.message)));
   $('#db-next').addEventListener('click', () => openTable(cur.schema, cur.table, cur.offset + cur.limit).catch(e => err(e.message)));
   $('#db-table-close').addEventListener('click', () => { cur.table = null; $('#db-table-panel').classList.add('hidden'); });
-
-  $('#db-new-project').addEventListener('submit', async e => {
-    e.preventDefault(); err('');
-    const name = $('#db-new-name').value;
-    if (!confirm(`Create project schema "${name}" and expose it through the API? The REST service restarts briefly.`)) return;
-    try {
-      await api('/api/db/projects', { method: 'POST', body: { name } });
-      $('#db-new-name').value = '';
-      await views.projects();
-      await openSchema(name);
-    } catch (e2) { err(e2.message); }
-  });
 
   // ---- SQL editor
   const sqlInput = $('#sql-input');
