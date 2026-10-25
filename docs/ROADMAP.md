@@ -26,9 +26,9 @@ Nightly 03:30 ──▶ pg_dump + .env ──▶ /mnt/data/backups (pendrive)
 |---|---|---|
 | A1 | **Real email for Auth**: free SMTP (Gmail app password, or Brevo free tier, no card) | Today SMTP is a fake placeholder and email confirmation is on, so email sign-ups cannot complete |
 | A2 | `SITE_URL` / `ADDITIONAL_REDIRECT_URLS` per app | Still `localhost:3000`; auth redirects break in production |
-| A3 | Postgres tuned for 4 GB (shared_buffers, work_mem, max_connections) + `pg_stat_statements` | Faster queries, enables query insights (B2) |
-| A4 | Turn off unused containers (e.g. analytics/vector if running, imgproxy if unused) | Frees RAM for apps; trade-off: Studio's Logs page |
-| A5 | zram swap | Survives memory spikes instead of the kernel killing a service |
+| A3 | ~~Postgres tuned for 4 GB~~ **already done** in `supabase/docker-compose.pi.yml`; `pg_stat_statements` comes with B2 | |
+| A4 | ~~Turn off analytics/vector~~ **already off** (not in the stack, saves ~1 GB) | |
+| A5 | zram swap: set up by `00-prepare-pi.sh`; `system/harden.sh check` shows it | |
 | A6 | Off-site encrypted backup (rclone → Google Drive free 15 GB) + **tested restore** | Backups now live on the same Pi; restore was never tested |
 | A7 | Alerts to your phone (ntfy, free): Pi down, disk > 85 %, backup failed, under-voltage | You hear about problems before an app breaks |
 | A8 | Close Kong's LAN port 8443 (bind to 127.0.0.1), unattended security upgrades | Smaller attack surface |
@@ -36,6 +36,21 @@ Nightly 03:30 ──▶ pg_dump + .env ──▶ /mnt/data/backups (pendrive)
 
 Hardware (owner): **official 27 W PSU** (critical: under-voltage corrupts SD cards);
 later a **USB SSD** for Postgres/Docker (the single biggest speed and reliability upgrade).
+
+### Phase A runbook (run on the Pi, in your own terminal, from `~/raspberrypi-dashboard-server`)
+
+`git pull` first. Each step is independent; stop after any of them.
+
+| Step | Command | You need |
+|---|---|---|
+| A1 email | `supabase/set-smtp.sh` then `supabase/set-smtp.sh --test you@gmail.com` | Gmail App Password (or Brevo SMTP login) |
+| A2 redirects | `supabase/auth-urls.sh site https://<app>.vercel.app` and `supabase/auth-urls.sh add 'https://<app>.vercel.app/**'` | your app URL (per app, when you connect one) |
+| A6 off-site | `supabase/offsite-setup.sh` (Google Drive via rclone, encrypted) then `supabase/restore-test.sh` | rclone on the laptop for the one-time sign-in; save the passphrase it shows in Bitwarden |
+| A7 alerts | `monitor/install.sh` | ntfy app on the phone; optional free healthchecks.io check |
+| A8 ports | `system/harden.sh check`, `system/harden.sh kong-8443`, `system/harden.sh auto-updates` | nothing |
+
+All scripts back up `.env` before editing it, never print secrets, and restart only the
+service they change.
 
 ## B. Pi Console features, borrowed from the best platforms
 
