@@ -45,7 +45,7 @@ later a **USB SSD** for Postgres/Docker (the single biggest speed and reliabilit
 |---|---|---|
 | A1 email | `supabase/set-smtp.sh` then `supabase/set-smtp.sh --test you@gmail.com` | Gmail App Password (or Brevo SMTP login) |
 | A2 redirects | `supabase/auth-urls.sh site https://<app>.vercel.app` and `supabase/auth-urls.sh add 'https://<app>.vercel.app/**'` | your app URL (per app, when you connect one) |
-| A6 off-site | `supabase/offsite-setup.sh` (Google Drive via rclone, encrypted) then `supabase/restore-test.sh` | rclone on the laptop for the one-time sign-in; save the passphrase it shows in Bitwarden |
+| A6 off-site | Laptop pulls the dumps daily over Tailscale: `tools/windows/pull-pi-backups.ps1` + a Task Scheduler task (Google Drive via `supabase/offsite-setup.sh` is the alternative; needs the Drive API). Then `supabase/restore-test.sh` on the Pi | Windows laptop with Tailscale; `ssh stdio@raspberrypi` without password |
 | A7 alerts | `monitor/install.sh` | ntfy app on the phone; optional free healthchecks.io check |
 | A8 ports | `system/harden.sh check`, `system/harden.sh kong-8443`, `system/harden.sh auto-updates` | nothing |
 

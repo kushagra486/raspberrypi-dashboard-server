@@ -47,8 +47,10 @@ case "$code" in 200|401) ;; *) add "Supabase API not answering (HTTP $code)";; e
 newest="$(ls -1t "$BACKUP_DIR"/db-*.dump 2>/dev/null | head -1)"
 if [ -z "$newest" ]; then add "no database backup found"
 elif [ $(( $(date +%s) - $(stat -c %Y "$newest") )) -gt $((26*3600)) ]; then add "last database backup is older than 26 h"; fi
-if [ -f "$BACKUP_DIR/.offsite-ok" ] && [ $(( $(date +%s) - $(stat -c %Y "$BACKUP_DIR/.offsite-ok") )) -gt $((50*3600)) ]; then
-  add "off-site backup upload has not succeeded for 2 days"
+# off-site copy (laptop pull or rclone) writes .offsite-ok; the laptop can be off for days
+OFFSITE_MAX_DAYS="${OFFSITE_MAX_DAYS:-7}"
+if [ -f "$BACKUP_DIR/.offsite-ok" ] && [ $(( $(date +%s) - $(stat -c %Y "$BACKUP_DIR/.offsite-ok") )) -gt $((OFFSITE_MAX_DAYS*86400)) ]; then
+  add "no off-site backup copy for ${OFFSITE_MAX_DAYS} days (open the laptop with Tailscale on)"
 fi
 
 if [ "${1:-}" = "--print" ]; then
