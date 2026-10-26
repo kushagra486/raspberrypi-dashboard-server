@@ -1,0 +1,19 @@
+[Unit]
+Description=Claude Code Remote Control for ~/projects/%i
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=stdio
+WorkingDirectory=/home/stdio/projects/%i
+Environment=HOME=/home/stdio
+Environment=PATH=/home/stdio/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/stdio/.local/bin/claude remote-control --name "Pi: %i" --permission-mode auto --spawn=same-dir
+Restart=always
+RestartSec=20
+# The status screen redraws constantly; keep only errors (stderr) in the journal.
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
