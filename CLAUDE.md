@@ -1,0 +1,78 @@
+# Pi backend: instructions for Claude sessions
+
+This repo is the infrastructure-as-code for Kushagra's Raspberry Pi 5 (4 GB RAM,
+128 GB SD, 32 GB USB pendrive). Goal: an always-on, self-hosted dev backend so
+projects never pause (replacing Supabase cloud free tier). If you are running
+**on the Pi itself**, you have a real shell: inspect before you change anything.
+
+## Hard rules
+
+- **Free and open source only.** No paid tiers, trials or anything with a card on file.
+- **Never commit secrets.** `.env`, JWT keys, tunnel credentials, SSH keys, dumps.
+  This repo is **public**; gitleaks hooks guard commits (`scripts/install-secret-scan.sh`).
+  A leaked secret must be rotated, not just deleted.
+- **Never format a disk** without the owner's explicit approval in chat.
+- **Check in at each milestone.** No silent giant changes. Ask before granting
+  broader access than described here, or before switching tools (e.g. Coolify → Dokploy).
+- **Tell honest limits.** He prefers that to reassurance.
+- If what you find on the Pi contradicts this file, say so and ask.
+- **Run it yourself (owner decision 2026-10-25).** Sessions that can reach the Pi
+  (`source tailscale/claude-connect.sh`, `ssh pi`) do routine work themselves instead of
+  handing the owner commands: `git pull` + deploy steps, restarts, health checks, logs,
+  tests, backups, applying reviewed migrations. Report what you ran and the result.
+  **Still ask first** for anything destructive or hard to undo (dropping data/projects,
+  restores over live data, formatting, deleting backups), anything that exposes something
+  new (Funnel paths, ports), rotating secrets, OS upgrades/reboots, and new paid/third-party
+  services. Never print secrets in output.
+
+## Skill
+
+`.claude/skills/pi-backend/` is the portable skill for reaching and operating the Pi
+from any session (connect script + `pi.sh` ops). Keep it in sync when infra facts change,
+and rebuild the upload zip (`pi-backend-skill.zip`, gitignored) for claude.ai.
+
+## Owner to-do
+
+Open items only the owner can do are in [docs/TODO.md](docs/TODO.md)
+(passwords to a password manager, Tailscale key expiry, power supply, ...).
+Mention the relevant ones when they matter; don't nag every message.
+
+## Architecture (agreed)
+
+- Vercel stays **primary** for app frontends; the Pi is the always-on database
+  and the **fallback** self-host layer. "Pi offline" is a rare edge case; don't
+  over-engineer for it.
+- Server model, not serverless.
+
+## Build order and status
+
+| Step | What | Where | Status |
+|---|---|---|---|
+| 0 | Inspect + clean the Pi | `scripts/00-inspect.sh` | **done 2026-10-24.** Debian 13 trixie 64-bit, 4K-page kernel8. Removed CasaOS, all its Docker apps (Immich, n8n, AdGuard, Syncthing, MySpeed, cloudflared-web), Ollama, OVOS, raspotify; disabled cups, Samba, desktop autologin (console boot). Kept SSH, Tailscale (logged out), Raspberry Pi Connect. Backups of all prior data in `~stdio/pre-cleanup/`. Pendrive formatted ext4 (`pidata`) at `/mnt/data` by UUID with `nofail`. Memory cgroup added to cmdline (needs reboot). **Power supply under-voltage seen (throttled=0x50000)**: owner to replace PSU |
+| 1 | Self-hosted Supabase (official docker stack) | `supabase/` (read its README) | **running on the Pi since 2026-10-24** in `~/supabase-project` (self-hosted v0.8.3, Postgres 17): 11 services healthy, ~1.3 GB RAM, 2.3 GB still free. **Gateway is Kong, not Envoy** (Envoy's tcmalloc needs 48-bit VA; the 4K kernel has 39-bit). Storage on `/mnt/data/supabase-storage`; `.env` mode 600; nightly `pg_dump` 03:30 to `/mnt/data/backups` (first dump verified). Studio + API on http://192.168.1.91:8000 |
+| 2 | SSH hardening: key-only, no root login, fail2ban, dedicated revocable agent key. Port 22 never public. `docker` group = root: say so once, let him decide | `ssh/` (todo) | not started |
+| 3 | Coolify as fallback deploy target **only if RAM allows** with Supabase running; else ask about Dokploy/CapRover/compose+Caddy | `deploy/` (todo) | not started |
+| 4 | Remote access | `tailscale/`, `docs/remote-access-tailscale.md` | **done 2026-10-24 with Tailscale** (owner has no domain; kushagra.dpdns.org was taken). Pi on tailnet as `raspberrypi` / `raspberrypi.tailc40262.ts.net`. **Funnel publishes only the Supabase API paths** (verified from the internet: API works with key, RLS enforced, Studio/pg-meta 404). Studio, Pi Console, SSH private to tailnet. `SUPABASE_PUBLIC_URL` / `API_EXTERNAL_URL` point at the Funnel URL. **Claude cloud sessions: `source tailscale/claude-connect.sh` then `ssh pi`** (needs `TS_AUTHKEY` in the environment: tag:claude, ephemeral, reusable; verified 2026-10-24, docs/claude-session-access.md). The temporary trycloudflare `quick-tunnel.service`, `pi-url` and the old `claude-cloud-agent` SSH key were removed 2026-10-24. Owner applied the policy 2026-10-24; Pi tagged `tag:pi`, Tailscale SSH on (`RunSSH`), Funnel unaffected. **No domain and no Cloudflare: owner decision 2026-10-24** (does not want to buy a domain; free ones are not usable). Do not propose a domain again unless he asks. `cloudflared/` files are dormant |
+| + | Pi Console dashboard (`dashboard/`): stats, Claude Code sessions via tmux + browser terminal, Docker, links, backups. Port 7070, LAN + tailnet (`http://raspberrypi:7070`), never on Funnel | `dashboard/` | **installed on the Pi 2026-10-24** (systemd `pi-console`, http://192.168.1.91:7070). Password generated into `~/pi-console-password.txt` for the owner to read and delete. `stdio` added to the `docker` group with owner approval. **2026-10-25: Database section + installable app deployed** (Pi at `bcb8977`); app address **https://raspberrypi.tailc40262.ts.net:9443** (Tailscale Serve, tailnet only; 8443 is taken by Kong's HTTPS listener). Password reset by owner via `npm run set-password` |
+| + | Isolated projects (owner request 2026-10-25): own database `proj_<name>`, own Auth users, own PostgREST + JWT secret, served at `/p/<name>/…` via proxy `iso-proxy` (127.0.0.1:8100) | `supabase/isolated/` (read its README) | **built and tested in a container 2026-10-25** (`test-isolation.sh`: 30/30, real GoTrue v2.197.0 + PostgREST v14.18 + Caddy). **Live on the Pi since 2026-10-25**: owner ran `lockdown`, `test-isolation.sh` (30/30 on the Pi) and `funnel` (`/p` on Funnel, owner-approved). Per-project **Overview** page (users, sign-ups/day, active users, requests/errors from `iso-proxy`'s key-free access log, size, tables, backups, Advisors) added the same day: run `iso-project.sh apply` once after pulling so the proxy starts logging. **Make isolated** (`iso-project.sh migrate` / `retire-shared`, Pi Console buttons) added the same day; `test-migrate.sh` 19/19 in the container. **Capacity tab + auto-sleep** (owner request "dashboard decides placement, no clogging") built and **deployed on the Pi 2026-10-25** (`b73fe6f`; waker verified listening on 172.18.0.1:7071, owner health check all green): placement advisor (`dashboard/lib/placement.js`: shared / isolated / stay on cloud; always-on vs auto-sleep from 7-day traffic; recommends only, owner clicks), sleep/wake (`lib/sleeper.js`: waker on the Docker gateway :7071 called by `iso-proxy` forward_auth with a token in `isolated/waker.env`; idle sleep; memory guard <400 MB sleeps the LRU auto-sleep project), import planner. Cold start ~0.6 s; sleeping projects need Pi Console up to wake. Update steps: pull, `npm ci`, restart `pi-console`, `iso-project.sh apply`. **Top-bar Terminal** (persistent tmux shell `pi` in the browser) deployed the same day |
+| + | Cloud import (owner request 2026-10-25): copy Supabase cloud projects onto the Pi (cloud only read) | `supabase/import/` (read its README) | **built 2026-10-25**, `test-cloud-import.sh` 36/36 in the container. Owner stores each connection string himself on the Pi (`cloud-import.sh add ALIAS`, hidden prompt, `~/.config/pi-import/`, mode 600; never in chat); Claude then runs `inspect` / `run --as isolated|shared`. Users + password hashes copied for isolated; storage files, realtime, edge functions, cron not copied |
+| + | Pi Console redesign (owner request 2026-10-25): supabase.com-style layout (left rail, org/project switcher, Projects home with cards, per-project pages) in a glass theme; **Logs** explorer (all services, server-side redaction) and **Reports** (API, database history from a 1-minute sampler, auth) | `dashboard/` | built 2026-10-25, 54/54 tests, checked in a browser at desktop and phone sizes |
+| 5 | Nightly config sync to this repo: gitleaks scan, commit only on change, deploy key scoped to this repo. Test a full restore | `cron/` (todo) | not started |
+
+## Known risks to check
+
+- Pi 5 default kernel uses 16K pages (`getconf PAGESIZE`); jemalloc software can
+  crash. Fix: `kernel=kernel8.img` in `/boot/firmware/config.txt` + reboot (ask first).
+- Supabase idles ~2-2.5 GB; measure with `docker stats` / `free -h` before Layer 3.
+- Multiple apps share one Supabase via schemas (`supabase/new-project.sh`); RLS on every table.
+- Restore: `supabase/restore-test.sh` **passed 2026-10-25** (dump restored into a scratch DB in the same Postgres, row counts match). A restore onto a *fresh* Pi install is still untested.
+- Off-site backups: **private repo `kushagra486/pi-backups` since 2026-10-25** (`supabase/offsite-github-sync.sh`, cron 04:15, age-encrypted, write-only deploy key `~/.ssh/pi_backups_deploy`; decryption key in owner's Bitwarden + `~/.config/pi-backup/age.key`).
+- Kong's HTTPS listener binds 0.0.0.0:8443 (LAN-reachable, self-signed; not internet). Owner to decide whether to bind it to 127.0.0.1.
+- Supabase `.env` was pasted into a private Claude chat 2026-10-25; owner decided **not** to rotate (accepted risk). Don't push rotation again; rotate only if he asks or a key is seen outside that chat.
+- Isolated projects rely on `iso-project.sh lockdown` (main database CONNECT revoked from PUBLIC, granted to each existing login). After a Supabase upgrade adds a login role, re-run `lockdown` or that service cannot connect. Undo: `grant connect on database postgres to public`.
+- Power supply under-voltage at every boot (`vcgencmd get_throttled` = 0x50000) until the owner swaps the PSU.
+
+## Git
+
+Work on a branch and open a PR; don't push to `main` directly. Run
+`scripts/install-secret-scan.sh` once per clone so the hooks are active.

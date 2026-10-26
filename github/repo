@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Work on any of your GitHub repos from the Pi without keeping copies of all of them.
+# GitHub stays the source of truth; a repo is copied to ~/projects only while you work on it,
+# as a slim clone (file history is downloaded on demand), and removed once fully pushed.
+#
+#   repo list [WORD]          your repos on GitHub (* = copy on the Pi), optionally filtered
+#   repo open NAME            copy NAME to ~/projects/NAME (or update it) and print the path
+#   repo new NAME [--public]  create a new repo on GitHub (private by default) and open it
+#   repo status               local copies: branch, uncommitted / unpushed work, size, last change
+#   repo close NAME           delete the local copy, only if everything is committed and pushed
+#   repo prune [DAYS]         close every copy untouched for DAYS (default 14) that is fully pushed
+#
+# NAME may be "repo" (your account) or "owner/repo". Uses the Pi's `gh` sign-in.
+set -euo pipefail
+
+ROOT="${REPO_ROOT:-$HOME/projects}"
+OWNER="${REPO_OWNER:-$(gh api user --jq .login)}"
+mkdir -p "$ROOT"
+
+die() { printf 'repo: %s\n' "$*" >&2; exit 1; }
+full() { case "$1" in */*) echo "$1" ;; *) echo "$OWNER/$1" ;; esac; }
+dir()  { echo "$ROOT/${1##*/}"; }
+
+# Why a copy can't be removed yet; prints nothing when it is safe to remove.
+unsaved() {
+  local d="$1"
+  git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || { echo "not a git repo"; return; }
+  [ -z "$(git -C "$d" status --porcelain)" ] || echo "uncommitted changes"
+  [ -z "$(git -C "$d" log --branches --not --remotes --oneline | head -1)" ] || echo "commits not pushed"
+  [ -z "$(git -C "$d" stash list | head -1)" ] || echo "stashed changes"
+}
+
+in_use() {  # remote-control service or a Pi Console/tmux session working in the folder
+  local name; name="$(basename "$1")"
+  systemctl is-active --quiet "claude-remote@$name.service" 2>/dev/null && { echo "remote control service"; return; }
+  tmux list-panes -a -F '#{pane_current_path}' 2>/dev/null | grep -qx "$1\(/.*\)\?" && echo "open tmux session"
+  true
+}
+
+case "${1:-}" in
+  list)
+    gh repo list "$OWNER" --limit 1000 --json name,isPrivate,pushedAt,description \
+      --jq '.[] | [.name, (if .isPrivate then "private" else "public" end), .pushedAt[:10], (.description // "")[:50]] | @tsv' |
+    while IFS=$'\t' read -r n vis pushed desc; do
+      [ -z "${2:-}" ] || [[ "${n,,} ${desc,,}" == *"${2,,}"* ]] || continue
+      mark=" "; [ -d "$ROOT/$n/.git" ] && mark="*"
+      printf '%s %-40s %-8s %s  %s\n' "$mark" "$n" "$vis" "$pushed" "$desc"
+    done
+    ;;
+  open)
+    [ -n "${2:-}" ] || die "usage: repo open NAME"
+    r="$(full "$2")"; d="$(dir "$r")"
+    if [ -d "$d/.git" ]; then
+      git -C "$d" fetch --quiet --prune && echo "updated remote branches in $d" >&2
+      if [ -z "$(git -C "$d" status --porcelain)" ] && git -C "$d" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+        git -C "$d" merge --ff-only --quiet '@{u}' 2>/dev/null || echo "branch has diverged from GitHub: not merged" >&2
+      fi
+    else
+      gh repo clone "$r" "$d" -- --filter=blob:none --quiet
+      echo "copied $r (slim clone)" >&2
+    fi
+    echo "$d"
+    ;;
+  new)
+    [ -n "${2:-}" ] || die "usage: repo new NAME [--public]"
+    vis=--private; [ "${3:-}" = --public ] && vis=--public
+    r="$(full "$2")"
+    gh repo create "$r" "$vis" --add-readme >/dev/null
+    echo "created https://github.com/$r ($vis)" >&2
+    exec "$0" open "$r"
+    ;;
+  status)
+    found=0
+    for d in "$ROOT"/*/; do
+      d="${d%/}"; [ -d "$d/.git" ] || continue; found=1
+      why="$(unsaved "$d" | paste -sd, -)"; use="$(in_use "$d")"
+      last="$(git -C "$d" log -1 --format=%cr 2>/dev/null || echo -)"
+      printf '%-32s %-30s %6s  last commit %-15s %s%s\n' "$(basename "$d")" \
+        "$(git -C "$d" branch --show-current)" "$(du -sh "$d" | cut -f1)" "$last" \
+        "${why:-all pushed}" "${use:+ · in use: $use}"
+    done
+    [ "$found" = 1 ] || echo "no copies in $ROOT"
+    ;;
+  close)
+    [ -n "${2:-}" ] || die "usage: repo close NAME"
+    d="$(dir "$2")"; [ -d "$d" ] || die "no copy at $d"
+    why="$(unsaved "$d" | paste -sd, -)"; [ -z "$why" ] || die "kept $d: $why"
+    use="$(in_use "$d")"; [ -z "$use" ] || die "kept $d: in use ($use)"
+    rm -rf "$d" && echo "removed $d (it is safe on GitHub)"
+    ;;
+  prune)
+    days="${2:-14}"; [[ "$days" =~ ^[0-9]+$ ]] || die "usage: repo prune [DAYS]"
+    for d in "$ROOT"/*/; do
+      d="${d%/}"; [ -d "$d/.git" ] || continue
+      # anything changed recently (ignoring dependencies and build output) keeps the copy
+      if [ -n "$(find "$d" \( -name node_modules -o -name .next -o -name dist -o -name .venv \) -prune -o \
+                  -newermt "-$days days" -print -quit)" ]; then continue; fi
+      why="$(unsaved "$d" | paste -sd, -)"; use="$(in_use "$d")"
+      if [ -n "$why$use" ]; then echo "kept $(basename "$d"): ${why}${why:+${use:+, }}${use}"
+      else rm -rf "$d" && echo "removed $(basename "$d") (untouched $days+ days, all pushed)"; fi
+    done
+    ;;
+  *) sed -n 2,14p "$0"; exit 1 ;;
+esac

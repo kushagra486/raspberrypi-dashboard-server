@@ -1,0 +1,270 @@
+// Pi Console front end: vanilla JS, no build step.
+const $ = s => document.querySelector(s);
+
+function el(tag, attrs = {}, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') n.className = v;
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v);
+  }
+  for (const k of kids) n.append(k instanceof Node ? k : document.createTextNode(k ?? ''));
+  return n;
+}
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, {
+    ...opts,
+    headers: opts.body ? { 'Content-Type': 'application/json' } : {},
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (r.status === 401) { location.href = '/login'; throw new Error('signed out'); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+
+const fmtBytes = b => {
+  if (b == null) return '–';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return `${b.toFixed(i ? 1 : 0)} ${u[i]}`;
+};
+const fmtAge = ms => {
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 60) return `${Math.floor(s)}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+};
+const fmtUptime = s => `${Math.floor(s / 86400)}d ${Math.floor(s % 86400 / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
+
+// ---- navigation: the left rail. Project pages are data-tab="database" + data-db="<view>".
+let current = 'home';
+const loaders = {};
+const rail = $('#tabs');
+function closeRail() { document.body.classList.remove('rail-open'); $('#rail-toggle').setAttribute('aria-expanded', 'false'); }
+document.querySelectorAll('#tabs button[data-tab]').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#tabs button[data-tab]').forEach(x => {
+    x.classList.toggle('active', x === b);
+    if (x === b) x.setAttribute('aria-current', 'page'); else x.removeAttribute('aria-current');
+  });
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.id === `tab-${b.dataset.tab}`));
+  current = b.dataset.tab;
+  window.pcDbView = b.dataset.db || null;
+  if (current !== 'database') { try { history.replaceState(null, '', `#${current}`); } catch {} }
+  closeRail();
+  loaders[current]?.();
+}));
+$('#rail-toggle').addEventListener('click', () => {
+  const open = document.body.classList.toggle('rail-open');
+  $('#rail-toggle').setAttribute('aria-expanded', String(open));
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeRail(); });
+// after choosing a page the rail folds away, even while the pointer still rests on it
+rail.addEventListener('click', e => { if (e.target.closest('button[data-tab]')) rail.classList.add('quiet'); });
+rail.addEventListener('mouseleave', () => rail.classList.remove('quiet'));
+rail.querySelector('.rail-logo').addEventListener('click', e => { e.preventDefault(); document.querySelector('#tabs button[data-tab="home"]').click(); });
+
+// ---- overview
+function meter(label, value, max, text) {
+  const pct = max ? Math.min(100, (value / max) * 100) : 0;
+  const level = pct > 90 ? 'bad' : pct > 75 ? 'warn' : 'ok';
+  return el('div', { class: 'card' },
+    el('div', { class: 'card-label' }, label),
+    el('div', { class: 'card-value' }, text),
+    el('div', { class: 'bar' }, el('div', { class: `fill ${level}`, style: `width:${pct.toFixed(1)}%` })));
+}
+
+loaders.overview = async () => {
+  const s = await api('/api/system');
+  $('#host').textContent = s.hostname;
+  const m = s.memory;
+  const cards = [
+    meter('CPU', s.cpu ?? 0, 100, s.cpu == null ? '…' : `${s.cpu}% · ${s.cpus} cores`),
+    meter('Memory', m.used, m.total, `${fmtBytes(m.used)} / ${fmtBytes(m.total)}`),
+    meter('Swap', m.swapUsed, m.swapTotal || 1, m.swapTotal ? `${fmtBytes(m.swapUsed)} / ${fmtBytes(m.swapTotal)}` : 'none'),
+    meter('Temperature', s.temperature ?? 0, 85, s.temperature == null ? 'n/a' : `${s.temperature.toFixed(1)} °C`),
+    ...s.disks.map(d => d.error
+      ? el('div', { class: 'card' }, el('div', { class: 'card-label' }, `Disk ${d.path}`), el('div', { class: 'card-value muted' }, d.error))
+      : meter(`Disk ${d.path}`, d.used, d.total, `${fmtBytes(d.used)} / ${fmtBytes(d.total)}`)),
+    el('div', { class: 'card' }, el('div', { class: 'card-label' }, 'Uptime · load'),
+      el('div', { class: 'card-value' }, `${fmtUptime(s.uptime)} · ${s.load.map(x => x.toFixed(2)).join(' ')}`)),
+  ];
+  $('#stats').replaceChildren(...cards);
+};
+
+// ---- claude / shell sessions
+loaders.claude = async () => {
+  const [list, folders] = await Promise.all([api('/api/sessions'), api('/api/folders')]);
+  const dirSel = $('#s-dir');
+  const keep = dirSel.value;
+  dirSel.replaceChildren(...folders.map(f => el('option', { value: f.path }, f.label)));
+  if (folders.some(f => f.path === keep)) dirSel.value = keep;
+  $('#f-root').replaceChildren(...folders.filter(f => f.root).map(f => el('option', { value: f.path }, f.label)));
+  $('#sessions').replaceChildren(...(list.length ? list.map(s => el('tr', {},
+    el('td', {}, el('b', {}, s.name)),
+    el('td', {}, el('span', { class: `tag ${s.kind}` }, s.kind === 'claude' ? 'Claude Code' : 'Shell')),
+    el('td', { class: 'mono' }, s.cwd),
+    el('td', {}, fmtAge(s.created)),
+    el('td', { class: 'actions' },
+      el('button', { onclick: () => openTerminal(s.name) }, 'Open'),
+      el('button', { class: 'danger', onclick: async () => {
+        if (!confirm(`End session "${s.name}"? Anything running in it stops.`)) return;
+        await api(`/api/sessions/${s.name}`, { method: 'DELETE' });
+        loaders.claude();
+      } }, 'End')))) : [el('tr', {}, el('td', { colspan: 5, class: 'muted' }, 'No sessions yet. Start one above.'))]));
+};
+
+$('#new-session').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('#s-error').textContent = '';
+  try {
+    const s = await api('/api/sessions', { method: 'POST', body: { name: $('#s-name').value, dir: $('#s-dir').value, kind: $('#s-kind').value } });
+    $('#s-name').value = '';
+    await loaders.claude();
+    openTerminal(s.name);
+  } catch (err) { $('#s-error').textContent = err.message; }
+});
+
+$('#new-folder').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('#s-error').textContent = '';
+  try {
+    const r = await api('/api/folders', { method: 'POST', body: { root: $('#f-root').value, name: $('#f-name').value } });
+    $('#f-name').value = '';
+    await loaders.claude();
+    $('#s-dir').value = r.dir;
+  } catch (err) { $('#s-error').textContent = err.message; }
+});
+
+// ---- terminal
+let term, socket, fit;
+function openTerminal(name) {
+  closeTerminal();
+  $('#term-title').textContent = name;
+  $('#term-view').classList.remove('hidden');
+  term = new Terminal({ cursorBlink: true, fontSize: 14, convertEol: false, scrollback: 5000,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', theme: { background: '#0b0f14' } });
+  fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open($('#terminal'));
+  fit.fit();
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  socket = new WebSocket(`${proto}://${location.host}/ws/term?session=${encodeURIComponent(name)}`);
+  const sendSize = () => socket.readyState === 1 && socket.send('1' + JSON.stringify({ cols: term.cols, rows: term.rows }));
+  socket.onopen = () => { sendSize(); term.focus(); };
+  socket.onmessage = ev => term.write(ev.data);
+  socket.onclose = () => term && term.write('\r\n\x1b[90m[disconnected]\x1b[0m\r\n');
+  term.onData(d => socket.readyState === 1 && socket.send('0' + d));
+  term.onResize(sendSize);
+  window.addEventListener('resize', onResize);
+}
+function onResize() { try { fit && fit.fit(); } catch {} }
+function closeTerminal() {
+  window.removeEventListener('resize', onResize);
+  if (socket) { socket.onclose = null; socket.close(); socket = null; }
+  if (term) { term.dispose(); term = null; }
+  $('#term-view').classList.add('hidden');
+}
+$('#term-close').addEventListener('click', () => { closeTerminal(); if (current === 'claude') loaders.claude(); });
+$('#open-terminal').addEventListener('click', async () => {
+  try { const s = await api('/api/terminal', { method: 'POST' }); openTerminal(s.name); }
+  catch (e) { alert(`Terminal: ${e.message}`); }
+});
+
+// ---- docker services
+loaders.services = async () => {
+  $('#d-error').textContent = '';
+  let list;
+  try { list = await api('/api/docker'); } catch (e) { $('#d-error').textContent = e.message; return; }
+  list.sort((a, b) => (a.project || '').localeCompare(b.project || '') || a.name.localeCompare(b.name));
+  const act = (c, verb) => async () => {
+    if (verb === 'stop' && !confirm(`Stop ${c.name}?`)) return;
+    try { await api(`/api/docker/${c.id}/${verb}`, { method: 'POST' }); }
+    catch (e) { $('#d-error').textContent = e.message; }
+    loaders.services();
+  };
+  $('#containers').replaceChildren(...list.map(c => el('tr', {},
+    el('td', {}, el('b', {}, c.name), c.project ? el('div', { class: 'muted small' }, c.project) : ''),
+    el('td', {}, el('span', { class: `tag ${c.state}` }, c.state), el('div', { class: 'muted small' }, c.status)),
+    el('td', { class: 'mono small' }, c.image),
+    el('td', { class: 'mono small' }, c.ports.join(', ')),
+    el('td', { class: 'actions' },
+      c.state === 'running'
+        ? el('button', { onclick: act(c, 'restart') }, 'Restart')
+        : el('button', { onclick: act(c, 'start') }, 'Start'),
+      c.state === 'running' ? el('button', { class: 'danger', onclick: act(c, 'stop') }, 'Stop') : '',
+      el('button', { class: 'ghost', onclick: () => showLogs(c) }, 'Logs')))));
+};
+async function showLogs(c) {
+  $('#logs-panel').classList.remove('hidden');
+  $('#logs-name').textContent = c.name;
+  $('#logs').textContent = 'Loading…';
+  try { $('#logs').textContent = (await api(`/api/docker/${c.id}/logs?tail=300`)).logs || '(no output)'; }
+  catch (e) { $('#logs').textContent = e.message; }
+  $('#logs').scrollTop = $('#logs').scrollHeight;
+}
+$('#logs-close').addEventListener('click', () => $('#logs-panel').classList.add('hidden'));
+
+// ---- apps
+loaders.apps = async () => {
+  const links = await api('/api/links');
+  $('#links').replaceChildren(...(links.length ? links.map(l => el('a', { class: 'card link', href: l.url, target: '_blank', rel: 'noopener' },
+    el('div', { class: 'card-value' }, l.name),
+    el('div', { class: 'muted' }, l.description || l.url))) : [el('p', { class: 'muted' }, 'Add links in config.json.')]));
+};
+
+// ---- backups
+loaders.backups = async () => {
+  const [b, st] = await Promise.all([api('/api/backups'), api('/api/backups/status').catch(() => ({}))]);
+  $('#b-error').textContent = b.error || '';
+  const ago = t => t ? fmtAge(t) : 'never';
+  $('#b-status').textContent = `Off-site copy: ${ago(st.offsiteOk)} · last restore test passed: ${ago(st.restoreTestOk)}${st.busy ? ` · running: ${st.busy}` : ''}`;
+  $('#b-run').disabled = !!st.busy || st.canRun === false;
+  const rows = Array.isArray(b) ? b : [];
+  $('#backups').replaceChildren(...(rows.length ? rows.map(f => el('tr', {},
+    el('td', { class: 'mono' }, f.name), el('td', {}, fmtBytes(f.size)), el('td', {}, fmtAge(f.modified)),
+    el('td', { class: 'row-actions' }, ...(f.dump ? [
+      el('a', { class: 'button ghost small', href: `/api/backups/download?name=${encodeURIComponent(f.name)}`, download: f.name }, 'Download'),
+      el('button', { class: 'ghost small', onclick: () => backupJob('/api/backups/restore-test', { name: f.name },
+        `Test-restore ${f.name}? It restores into a temporary database and never touches live data.`) }, 'Test restore'),
+    ] : []))))
+    : [el('tr', {}, el('td', { colspan: 4, class: 'muted' }, 'No backups found.'))]));
+};
+async function backupJob(path, body, question) {
+  if (question && !confirm(question)) return;
+  const out = $('#b-output');
+  out.classList.remove('hidden'); out.textContent = 'running… (this can take a minute)';
+  $('#b-run').disabled = true;
+  try {
+    const r = await api(path, { method: 'POST', body });
+    out.textContent = `${r.ok ? '✔ done' : `✖ failed (exit ${r.code})`}\n\n${r.output}`;
+  } catch (e) { out.textContent = `✖ ${e.message}`; }
+  await loaders.backups().catch(() => {});
+}
+$('#b-run').addEventListener('click', () => backupJob('/api/backups/run', {}, 'Run a database backup now?'));
+
+// copy buttons (navigator.clipboard needs HTTPS; fall back to selecting the text)
+document.addEventListener('click', async e => {
+  const id = e.target.dataset && e.target.dataset.copy;
+  if (!id) return;
+  const node = document.getElementById(id);
+  try { await navigator.clipboard.writeText(node.textContent); e.target.textContent = 'Copied'; }
+  catch { const r = document.createRange(); r.selectNodeContents(node); getSelection().removeAllRanges(); getSelection().addRange(r); e.target.textContent = 'Press Ctrl+C'; }
+  setTimeout(() => { e.target.textContent = 'Copy'; }, 2000);
+});
+
+$('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); location.href = '/login'; });
+
+// Start on the page in the URL (#home, #capacity, #db/sql ...), refresh live pages every 5 s.
+// Pages whose code loads later (db.js) start their own loader once ready.
+const start = location.hash.slice(1);
+const [startTab, startDb] = start.startsWith('db/') ? ['database', start.slice(3)] : [start, null];
+const startBtn = document.querySelector(`#tabs button[data-tab="${CSS.escape(startTab)}"]${startDb ? `[data-db="${CSS.escape(startDb)}"]` : ''}`);
+(startBtn || document.querySelector('#tabs button[data-tab="home"]')).click();
+setInterval(() => {
+  if (document.hidden || !$('#term-view').classList.contains('hidden')) return;
+  if (current === 'overview' || current === 'services') loaders[current]().catch(() => {});
+}, 5000);
