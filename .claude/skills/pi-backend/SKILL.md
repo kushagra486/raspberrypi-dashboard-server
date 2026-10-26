@@ -1,6 +1,6 @@
 ---
 name: pi-backend
-description: Connect to and operate Kushagra's always-on Raspberry Pi backend (self-hosted Supabase database + Pi Console dashboard) from any session. Use whenever the user mentions the Pi, "my server", "my database", self-hosted Supabase, Pi Console, wants an app to use his own backend instead of Supabase cloud, asks to run SQL, create tables or an app schema, get connection settings for an app or Vercel, check backups, or check whether the server is up.
+description: Connect to and operate Kushagra's always-on Raspberry Pi backend (self-hosted Supabase database + Pi Console dashboard) from any session. Use whenever the user mentions the Pi, "my server", "my database", self-hosted Supabase, Pi Console, wants to connect or link this project/app/repo to the Pi or Pi Console, wants an app to use his own backend instead of Supabase cloud, asks to run SQL, create tables or an app schema, get connection settings for an app or Vercel, check backups, or check whether the server is up.
 ---
 
 # Pi backend
@@ -42,7 +42,28 @@ source "<this skill's directory>/scripts/connect.sh"
 No shell (claude.ai chat, mobile): you cannot reach the Pi. Answer from the facts
 above and give him the exact commands to run himself.
 
-## 2. Operate
+## 2. Link the current project to the Pi
+
+When he says "connect this project to my Pi / Pi Console" from inside an app repo:
+
+```bash
+<skill>/scripts/link-project.sh myapp                 # shared: schema myapp, shared sign-in users
+<skill>/scripts/link-project.sh myapp --isolated      # own database, own users, own keys
+<skill>/scripts/link-project.sh myapp --site https://myapp.vercel.app   # + sign-in redirects
+```
+
+- Name: lowercase, from the repo name unless he gives one. Ask **shared or isolated** if
+  unclear: isolated when the app needs its own sign-up users; shared otherwise (less RAM).
+- It creates the project if missing (safe to re-run), writes `SUPABASE_URL`,
+  `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SCHEMA` to `.env.local` with the framework's
+  browser prefix (`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, `EXPO_PUBLIC_`), and gitignores it.
+  Never fetches secret keys.
+- Then: add `@supabase/supabase-js` if missing, create the client with
+  `{ db: { schema } }`, write tables as migrations with **RLS on every table**
+  (`pi.sh sql < file.sql`), and tell him to add the same three variables in Vercel.
+- The project appears in Pi Console → Database (and Capacity for isolated ones).
+
+## 3. Operate
 
 `<skill>/scripts/pi.sh`:
 
@@ -66,7 +87,7 @@ Wiring an app:
 4. Auth redirects: add the app's URL to `ADDITIONAL_REDIRECT_URLS` (or `SITE_URL`) in
    `~/supabase-project/.env`, then `docker compose up -d` there.
 
-## 3. Rules (he set these)
+## 4. Rules (he set these)
 
 - **Free and open source only**; no paid tiers, nothing with a card.
 - **Never print or commit secrets**: secret key, DB password, dashboard password,
