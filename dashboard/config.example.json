@@ -1,0 +1,17 @@
+{
+  "bind": "0.0.0.0",
+  "port": 7070,
+  "secureCookies": false,
+  "allowedOrigins": [],
+  "projectRoots": ["~/projects", "~/raspberrypi-dashboard-server"],
+  "claudeBin": "~/.local/bin/claude",
+  "shell": "/bin/bash",
+  "backupDir": "/mnt/data/backups",
+  "disks": ["/", "/mnt/data"],
+  "dockerSocket": "/var/run/docker.sock",
+  "sessionTtlHours": 12,
+  "links": [
+    { "name": "Supabase Studio", "url": "http://raspberrypi.local:8000", "description": "Database, auth, storage, SQL editor" },
+    { "name": "Supabase API", "url": "http://raspberrypi.local:8000/rest/v1/", "description": "REST endpoint for apps" }
+  ]
+}

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pi Console · Sign in</title>
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/icon-180.png">
+  <meta name="theme-color" content="#121821">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Pi Console">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+  <div class="backdrop" aria-hidden="true"></div>
+  <form id="login" class="login-card">
+    <h1>Pi Console</h1>
+    <p class="muted">Sign in to your Raspberry Pi</p>
+    <input id="password" type="password" placeholder="Password" autocomplete="current-password" autofocus required>
+    <button type="submit">Sign in</button>
+    <p id="error" class="error" role="alert"></p>
+  </form>
+  <script src="/static/login.js"></script>
+</body>
+</html>

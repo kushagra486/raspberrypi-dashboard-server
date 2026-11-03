@@ -1,0 +1,16 @@
+#!/bin/sh
+# Re-scan every commit about to be pushed (catches `git commit --no-verify`).
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-push: gitleaks is not installed; run scripts/install-secret-scan.sh" >&2
+  exit 1
+fi
+zero=0000000000000000000000000000000000000000
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue  # branch deletion
+  if [ "$remote_sha" = "$zero" ]; then
+    range="$local_sha --not --remotes"    # new branch: commits not on any remote yet
+  else
+    range="$remote_sha..$local_sha"
+  fi
+  gitleaks git --redact --no-banner --log-opts="$range" . || exit 1
+done

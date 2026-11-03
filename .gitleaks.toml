@@ -1,0 +1,36 @@
+# gitleaks config: default rules plus a few for this stack.
+# Used by .githooks/ (local) and .github/workflows/secret-scan.yml (CI).
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "supabase-secret-key"
+description = "Supabase secret API key"
+regex = '''sb_secret_[A-Za-z0-9_-]{16,}'''
+keywords = ["sb_secret_"]
+
+[[rules]]
+id = "cloudflared-tunnel-secret"
+description = "cloudflared tunnel credentials"
+regex = '''"TunnelSecret"\s*:\s*"[^"]+"'''
+keywords = ["tunnelsecret"]
+
+# The defaults only flag high-entropy values; this also catches weak,
+# human-chosen passwords in KEY=value files.
+[[rules]]
+id = "env-style-secret"
+description = "PASSWORD/SECRET/TOKEN/KEY assignment"
+regex = '''(?m)^\s*(?:export\s+)?[A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|_KEY)[A-Z0-9_]*\s*=\s*["']?([^\s"'$<{][^\s"']{5,})'''
+secretGroup = 1
+keywords = ["password", "passwd", "secret", "token", "_key"]
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = ['''this_password_is_insecure''', '''(?i)changeme|your[-_]|example|placeholder''']
+
+[[rules]]
+id = "dotenv-file"
+description = "dotenv file committed (secrets live off-repo)"
+path = '''(?:^|/)\.env(?:\.[^/]+)?$'''
+[[rules.allowlists]]
+paths = ['''\.env\.example$''']

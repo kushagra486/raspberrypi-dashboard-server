@@ -1,0 +1,25 @@
+# Cloudflare named tunnel for the Pi. setup-tunnel.sh renders this into
+# /etc/cloudflared/config.yml, filling in TUNNEL_ID and DOMAIN.
+# The credentials JSON it points at stays on the Pi and is never committed.
+tunnel: ${TUNNEL_ID}
+credentials-file: /etc/cloudflared/${TUNNEL_ID}.json
+
+ingress:
+  # Pi Console (dashboard + Claude sessions). Protect with Cloudflare Access.
+  - hostname: console.${DOMAIN}
+    service: http://localhost:7070
+  # Supabase Studio, the admin UI. Protect with Cloudflare Access.
+  - hostname: studio.${DOMAIN}
+    service: http://localhost:8000
+  # Supabase API for apps (REST, Auth, Storage, Realtime, Functions). Public:
+  # apps authenticate with the anon key + RLS, so no Access here.
+  - hostname: api.${DOMAIN}
+    service: http://localhost:8000
+  # SSH for your devices and Claude sessions. Protect with Cloudflare Access
+  # (people: email code; machines: service token). Key-only, see ssh/.
+  - hostname: ssh.${DOMAIN}
+    service: ssh://localhost:22
+  # Apps you self-host get a line each, e.g.:
+  # - hostname: janseva.${DOMAIN}
+  #   service: http://localhost:3001
+  - service: http_status:404
