@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pi Dashboard</title>
+  <style>
+    :root {
+      --bg: #f4f5f7; --card: #ffffff; --text: #1d2330; --muted: #6b7280;
+      --track: #e5e7eb; --ok: #16a34a; --warn: #d97706; --bad: #dc2626;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f1218; --card: #1a1f29; --text: #e6e9ef; --muted: #9aa3b2;
+        --track: #2a3140; --ok: #22c55e; --warn: #f59e0b; --bad: #ef4444;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+      font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    header { max-width: 960px; margin: 0 auto 16px; }
+    h1 { margin: 0; font-size: 1.4rem; }
+    .sub { color: var(--muted); font-size: .9rem; }
+    .grid {
+      max-width: 960px; margin: 0 auto; display: grid; gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+    .card { background: var(--card); border-radius: 10px; padding: 14px 16px; }
+    .label { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+    .value { font-size: 1.8rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .detail { color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
+    .bar { height: 6px; background: var(--track); border-radius: 3px; margin: 8px 0 6px; overflow: hidden; }
+    .bar > div { height: 100%; width: 0; background: var(--ok); transition: width .4s; }
+    .wide { grid-column: 1 / -1; }
+    table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--track); }
+    th { color: var(--muted); font-weight: 500; font-size: .8rem; }
+    .error { color: var(--bad); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="hostname">Pi Dashboard</h1>
+    <div class="sub"><span id="platform"></span> · up <span id="uptime">–</span> · <span id="status">loading…</span></div>
+  </header>
+
+  <main class="grid">
+    <section class="card">
+      <div class="label">CPU temperature</div>
+      <div class="value" id="temp">–</div>
+      <div class="bar"><div id="temp-bar"></div></div>
+      <div class="detail" id="temp-detail"></div>
+    </section>
+    <section class="card">
+      <div class="label">CPU usage</div>
+      <div class="value" id="cpu">–</div>
+      <div class="bar"><div id="cpu-bar"></div></div>
+      <div class="detail" id="cpu-detail"></div>
+    </section>
+    <section class="card">
+      <div class="label">Memory</div>
+      <div class="value" id="mem">–</div>
+      <div class="bar"><div id="mem-bar"></div></div>
+      <div class="detail" id="mem-detail"></div>
+    </section>
+    <section class="card">
+      <div class="label">Disk (/)</div>
+      <div class="value" id="disk">–</div>
+      <div class="bar"><div id="disk-bar"></div></div>
+      <div class="detail" id="disk-detail"></div>
+    </section>
+    <section class="card wide">
+      <div class="label">Network</div>
+      <table>
+        <thead><tr><th>Interface</th><th>IPv4</th><th>Sent</th><th>Received</th></tr></thead>
+        <tbody id="net"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const REFRESH_MS = {{ refresh_ms }};
+    const $ = (id) => document.getElementById(id);
+
+    function bytes(n) {
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let i = 0;
+      while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+      return n.toFixed(i ? 1 : 0) + " " + units[i];
+    }
+
+    function duration(s) {
+      const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+      return (d ? d + "d " : "") + h + "h " + m + "m";
+    }
+
+    function setBar(id, pct, warn, bad) {
+      const el = $(id);
+      el.style.width = Math.min(pct, 100) + "%";
+      el.style.background = pct >= bad ? "var(--bad)" : pct >= warn ? "var(--warn)" : "var(--ok)";
+    }
+
+    function render(s) {
+      $("hostname").textContent = s.hostname;
+      document.title = s.hostname + " · Pi Dashboard";
+      $("platform").textContent = s.platform;
+      $("uptime").textContent = duration(s.uptime_seconds);
+
+      const t = s.cpu.temperature_c;
+      $("temp").textContent = t == null ? "n/a" : t.toFixed(1) + " °C";
+      setBar("temp-bar", t == null ? 0 : t / 85 * 100, 70 / 85 * 100, 80 / 85 * 100);
+      $("temp-detail").textContent = "Throttles at 80 °C";
+
+      $("cpu").textContent = s.cpu.percent.toFixed(0) + "%";
+      setBar("cpu-bar", s.cpu.percent, 70, 90);
+      const la = s.cpu.load_avg.filter((x) => x != null);
+      $("cpu-detail").textContent = s.cpu.count + " cores" + (la.length ? " · load " + la.join(" / ") : "");
+
+      $("mem").textContent = s.memory.percent.toFixed(0) + "%";
+      setBar("mem-bar", s.memory.percent, 75, 90);
+      $("mem-detail").textContent = bytes(s.memory.used) + " of " + bytes(s.memory.total);
+
+      $("disk").textContent = s.disk.percent.toFixed(0) + "%";
+      setBar("disk-bar", s.disk.percent, 80, 95);
+      $("disk-detail").textContent = bytes(s.disk.used) + " of " + bytes(s.disk.total);
+
+      $("net").replaceChildren(...s.network.map((n) => {
+        const tr = document.createElement("tr");
+        for (const v of [n.name, n.ipv4 || "–", bytes(n.bytes_sent), bytes(n.bytes_recv)]) {
+          const td = document.createElement("td");
+          td.textContent = v;
+          tr.appendChild(td);
+        }
+        return tr;
+      }));
+
+      $("status").textContent = "updated " + new Date(s.timestamp * 1000).toLocaleTimeString();
+      $("status").className = "";
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch("/api/stats");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        render(await res.json());
+      } catch (e) {
+        $("status").textContent = "connection lost (" + e.message + ")";
+        $("status").className = "error";
+      } finally {
+        setTimeout(refresh, REFRESH_MS);
+      }
+    }
+
+    refresh();
+  </script>
+</body>
+</html>
